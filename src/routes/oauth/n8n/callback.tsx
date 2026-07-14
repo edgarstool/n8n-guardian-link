@@ -1,10 +1,29 @@
 import { createFileRoute, redirect } from "@tanstack/react-router";
 import { getEnv } from "@/lib/n8n/env.server";
+import {
+  CategorizedError,
+  ErrorCategory,
+  logCategory,
+  toCategory,
+} from "@/lib/n8n/errors.server";
 import { getASMetadata, getRegistration, putTokens } from "@/lib/n8n/kv.server";
 import { runInitializeAndListTools } from "@/lib/n8n/mcp.server";
 import { takePendingAuthCookie } from "@/lib/n8n/pending-cookie.server";
 import { ensureSessionId } from "@/lib/n8n/session.server";
 import { exchangeAuthorizationCode, tokenResponseToStored } from "@/lib/n8n/tokens.server";
+
+function redirectToResult(
+  base: string,
+  status: "success" | "error" | "cancelled",
+  extras?: { tools?: string; protocol?: string; reason?: ErrorCategory },
+): Response {
+  const url = new URL(`${base}/oauth/n8n/result`);
+  url.searchParams.set("status", status);
+  if (extras?.tools) url.searchParams.set("tools", extras.tools);
+  if (extras?.protocol) url.searchParams.set("protocol", extras.protocol);
+  if (extras?.reason) url.searchParams.set("reason", extras.reason);
+  return Response.redirect(url.toString(), 302);
+}
 
 async function handleCallback(request: Request): Promise<Response> {
   const url = new URL(request.url);
@@ -12,41 +31,54 @@ async function handleCallback(request: Request): Promise<Response> {
   const state = url.searchParams.get("state");
   const errorParam = url.searchParams.get("error");
 
-  const env = getEnv();
-  const resultBase = `${env.APP_BASE_URL}/oauth/n8n/result`;
+  // Resolving env may itself throw missing_configuration.
+  let appBase: string;
+  try {
+    appBase = getEnv().APP_BASE_URL;
+  } catch (e) {
+    const cat = toCategory(e, "missing_configuration");
+    logCategory("callback", cat);
+    // Fall back to relative URL when app base cannot be resolved.
+    return Response.redirect("/oauth/n8n/result?status=error&reason=" + cat, 302);
+  }
 
   // Always consume the pending cookie exactly once, regardless of outcome.
   const pending = await takePendingAuthCookie();
 
   if (errorParam === "access_denied" || errorParam === "user_cancelled") {
-    return Response.redirect(`${resultBase}?status=cancelled`, 302);
+    logCategory("callback", "access_denied");
+    return redirectToResult(appBase, "cancelled", { reason: "access_denied" });
   }
   if (errorParam) {
-    return Response.redirect(
-      `${resultBase}?status=error&reason=${encodeURIComponent(errorParam)}`,
-      302,
-    );
+    // Any other provider error → surface only as access_denied category.
+    logCategory("callback", "access_denied");
+    return redirectToResult(appBase, "error", { reason: "access_denied" });
   }
   if (!code || !state) {
-    return Response.redirect(`${resultBase}?status=error&reason=missing_code_or_state`, 302);
+    logCategory("callback", "missing_code_or_state");
+    return redirectToResult(appBase, "error", { reason: "missing_code_or_state" });
   }
   if (!pending) {
-    return Response.redirect(`${resultBase}?status=error&reason=state_expired`, 302);
+    logCategory("callback", "state_expired");
+    return redirectToResult(appBase, "error", { reason: "state_expired" });
   }
   if (pending.state !== state) {
-    return Response.redirect(`${resultBase}?status=error&reason=state_mismatch`, 302);
+    logCategory("callback", "state_mismatch");
+    return redirectToResult(appBase, "error", { reason: "state_mismatch" });
   }
 
-  // Session ID for KV token storage.
   const sid = ensureSessionId();
 
-  const meta = await getASMetadata(pending.issuer);
-  const reg = await getRegistration(pending.issuer, pending.redirectUri);
-  if (!meta || !reg) {
-    return Response.redirect(`${resultBase}?status=error&reason=missing_registration`, 302);
-  }
-
+  let category: ErrorCategory = "token_exchange_failed";
   try {
+    const meta = await getASMetadata(pending.issuer);
+    const reg = await getRegistration(pending.issuer, pending.redirectUri);
+    if (!meta || !reg) {
+      logCategory("callback", "missing_registration");
+      return redirectToResult(appBase, "error", { reason: "missing_registration" });
+    }
+
+    category = "token_exchange_failed";
     const tokenResp = await exchangeAuthorizationCode({
       tokenEndpoint: meta.token_endpoint,
       code,
@@ -63,19 +95,18 @@ async function handleCallback(request: Request): Promise<Response> {
     });
     await putTokens(sid, stored);
 
-    // Validate with initialize → notifications/initialized → tools/list
+    // Full MCP lifecycle validation.
+    category = "mcp_initialize_failed";
     const list = await runInitializeAndListTools(sid);
-    return Response.redirect(
-      `${resultBase}?status=success&tools=${encodeURIComponent(String(list.tools.length))}&protocol=${encodeURIComponent(list.negotiatedProtocolVersion)}`,
-      302,
-    );
+
+    return redirectToResult(appBase, "success", {
+      tools: String(list.tools.length),
+      protocol: list.negotiatedProtocolVersion,
+    });
   } catch (e) {
-    const msg = e instanceof Error ? e.message : String(e);
-    console.error("[oauth/callback] failed:", msg);
-    return Response.redirect(
-      `${resultBase}?status=error&reason=${encodeURIComponent(msg.slice(0, 120))}`,
-      302,
-    );
+    const cat = e instanceof CategorizedError ? e.category : category;
+    logCategory("callback", cat);
+    return redirectToResult(appBase, "error", { reason: cat });
   }
 }
 
@@ -85,7 +116,6 @@ export const Route = createFileRoute("/oauth/n8n/callback")({
       GET: async ({ request }) => handleCallback(request),
     },
   },
-  // If somehow rendered as a page, immediately redirect home.
   beforeLoad: () => {
     throw redirect({ to: "/" });
   },
