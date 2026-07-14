@@ -141,19 +141,6 @@ await check("openapi document lists both endpoints with bearer auth", async () =
   assert.deepEqual(doc.security, [{ bearerAuth: [] }]);
 });
 
-// --- openapi: describes both routes with bearer auth ---
-await check("openapi document lists both endpoints with bearer auth", async () => {
-  // Import the route module and invoke its handler.
-  const mod = await import("../src/routes/openapi[.]json");
-  const handler = (mod as any).Route.options.server.handlers.GET;
-  const res: Response = await handler({ request: new Request("https://example.com/openapi.json") });
-  const doc = JSON.parse(await res.text());
-  assert.equal(doc.openapi, "3.1.0");
-  assert.ok(doc.paths["/api/n8n/tools"].get);
-  assert.ok(doc.paths["/api/n8n/call"].post);
-  assert.equal(doc.components.securitySchemes.bearerAuth.scheme, "bearer");
-  assert.deepEqual(doc.security, [{ bearerAuth: [] }]);
-});
 
 console.log(`\n${passed} passed, ${failed} failed`);
 if (failed) process.exit(1);
