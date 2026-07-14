@@ -1,6 +1,7 @@
 // MCP + OAuth discovery pipeline. See RFC 8414, RFC 9728, MCP auth spec.
 
 import { getEnv, requireN8nMcpUrl } from "./env.server";
+import { CategorizedError, logCategory } from "./errors.server";
 import { putASMetadata, type ASMetadata, type DiscoveryResult } from "./kv.server";
 
 function parseWwwAuthenticate(header: string): Record<string, string> {
