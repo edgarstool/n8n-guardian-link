@@ -206,7 +206,7 @@ export const listN8nMcpTools = createServerFn({ method: "POST" }).handler(
       const result = await runInitializeAndListTools(sid);
       return {
         ok: true,
-        protocolVersion: result.protocolVersion ?? result.negotiatedProtocolVersion,
+        protocolVersion: result.negotiatedProtocolVersion,
         tools: result.tools,
       };
     } catch (e) {
