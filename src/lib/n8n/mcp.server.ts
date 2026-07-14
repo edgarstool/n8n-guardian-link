@@ -1,9 +1,11 @@
 // Minimal MCP client for the n8n Instance-level MCP endpoint.
-// Handles protocol negotiation, JSON + SSE responses, and 401→refresh→retry.
+// Emits only allowlisted error categories. Applies exactly one
+// token refresh + one retry per authenticated request, independently.
 
 import { requireN8nMcpUrl } from "./env.server";
+import { CategorizedError, ErrorCategory, logCategory } from "./errors.server";
 import { getTokens, putTokens } from "./kv.server";
-import { getValidAccessToken } from "./tokens.server";
+import { forceRefreshTokens, getValidAccessToken } from "./tokens.server";
 
 export const SUPPORTED_MCP_VERSIONS = ["2025-11-25", "2025-06-18", "2025-03-26"] as const;
 export type SupportedMcpVersion = (typeof SUPPORTED_MCP_VERSIONS)[number];
@@ -17,7 +19,6 @@ type JsonRpcResponse = {
 };
 
 function parseSseText(text: string): JsonRpcResponse | null {
-  // Concatenate `data: ...` lines
   const events = text.split(/\n\n/);
   for (const ev of events) {
     const dataLines = ev
@@ -38,12 +39,9 @@ function parseSseText(text: string): JsonRpcResponse | null {
 
 async function readMcpResponse(r: Response): Promise<JsonRpcResponse | null> {
   const ct = r.headers.get("content-type") ?? "";
-  if (ct.includes("application/json")) {
-    return (await r.json()) as JsonRpcResponse;
-  }
+  if (ct.includes("application/json")) return (await r.json()) as JsonRpcResponse;
   const text = await r.text();
   if (ct.includes("text/event-stream")) return parseSseText(text);
-  // Try JSON as fallback
   try {
     return JSON.parse(text) as JsonRpcResponse;
   } catch {
@@ -69,23 +67,24 @@ async function mcpFetch(body: unknown, opts: CallOptions): Promise<Response> {
   return fetch(url, { method: "POST", headers, body: JSON.stringify(body) });
 }
 
-async function callWith401Retry(
+/**
+ * Send one authenticated MCP request. On HTTP 401, apply exactly one
+ * token refresh and exactly one retry, then return whatever the retry
+ * produced. Independent per-request budget.
+ */
+async function mcpFetchWithOneRetry(
   sid: string,
   body: unknown,
-  opts: CallOptions,
+  base: CallOptions,
 ): Promise<{ response: Response; usedToken: string }> {
-  let token = opts.accessToken;
-  let r = await mcpFetch(body, { ...opts, accessToken: token });
-  if (r.status === 401) {
-    // Force refresh via getValidAccessToken by marking expired
-    const t = await getTokens(sid);
-    if (t) {
-      await putTokens(sid, { ...t, expires_at: 0 });
-    }
-    const fresh = await getValidAccessToken(sid);
-    token = fresh.access_token;
-    r = await mcpFetch(body, { ...opts, accessToken: token });
-  }
+  let token = base.accessToken;
+  let r = await mcpFetch(body, { ...base, accessToken: token });
+  if (r.status !== 401) return { response: r, usedToken: token };
+  // Drain and discard the 401 body before retrying — never log it.
+  await r.text().catch(() => "");
+  const refreshed = await forceRefreshTokens(sid);
+  token = refreshed.access_token;
+  r = await mcpFetch(body, { ...base, accessToken: token });
   return { response: r, usedToken: token };
 }
 
@@ -94,10 +93,15 @@ export type McpToolsListResult = {
   tools: Array<{ name: string; description?: string }>;
 };
 
+function fail(category: ErrorCategory, status?: number): never {
+  logCategory("mcp", category, status);
+  throw new CategorizedError(category, status);
+}
+
 export async function runInitializeAndListTools(sid: string): Promise<McpToolsListResult> {
   const t = await getValidAccessToken(sid);
 
-  // 1) initialize
+  // ---- 1) initialize ----
   const initBody = {
     jsonrpc: "2.0",
     id: 1,
@@ -108,54 +112,76 @@ export async function runInitializeAndListTools(sid: string): Promise<McpToolsLi
       clientInfo: { name: "edgars-tools-n8n-connector", version: "1.0.0" },
     },
   };
-  const { response: initResp, usedToken } = await callWith401Retry(sid, initBody, {
+  const initResult = await mcpFetchWithOneRetry(sid, initBody, {
     accessToken: t.access_token,
   });
+  const initResp = initResult.response;
   if (!initResp.ok) {
-    const text = await initResp.text().catch(() => "");
-    throw new Error(`initialize failed: ${initResp.status} ${text.slice(0, 200)}`);
+    await initResp.text().catch(() => "");
+    fail("mcp_initialize_failed", initResp.status);
   }
   const mcpSessionId = initResp.headers.get("mcp-session-id") ?? undefined;
   const parsed = await readMcpResponse(initResp);
-  if (!parsed || parsed.error) {
-    throw new Error(`initialize error: ${parsed?.error?.message ?? "no response"}`);
-  }
-  const result = parsed.result as { protocolVersion?: string };
+  if (!parsed || parsed.error) fail("mcp_initialize_failed", initResp.status);
+  const result = (parsed as JsonRpcResponse).result as { protocolVersion?: string } | undefined;
   const serverVersion = result?.protocolVersion ?? LATEST_MCP_VERSION;
   if (!(SUPPORTED_MCP_VERSIONS as readonly string[]).includes(serverVersion)) {
-    throw new Error(
-      `Server returned unsupported MCP protocolVersion "${serverVersion}". Supported: ${SUPPORTED_MCP_VERSIONS.join(", ")}.`,
-    );
+    fail("mcp_initialize_failed", initResp.status);
   }
   const negotiated = serverVersion;
 
-  // Persist negotiated version
-  const tokens = await getTokens(sid);
-  if (tokens) {
-    await putTokens(sid, { ...tokens, negotiated_mcp_protocol_version: negotiated });
+  const stored = await getTokens(sid);
+  if (stored) {
+    await putTokens(sid, { ...stored, negotiated_mcp_protocol_version: negotiated });
   }
 
-  // 2) notifications/initialized (no id)
-  await mcpFetch(
+  // ---- 2) notifications/initialized ----
+  // Body may be empty per JSON-RPC notification semantics, but the HTTP
+  // status MUST be 2xx. Any non-2xx fails the flow.
+  const notifResult = await mcpFetchWithOneRetry(
+    sid,
     { jsonrpc: "2.0", method: "notifications/initialized" },
-    { accessToken: usedToken, protocolVersion: negotiated, sessionIdHeader: mcpSessionId },
+    {
+      accessToken: initResult.usedToken,
+      protocolVersion: negotiated,
+      sessionIdHeader: mcpSessionId,
+    },
   );
+  if (!notifResult.response.ok) {
+    await notifResult.response.text().catch(() => "");
+    fail("mcp_initialized_notification_failed", notifResult.response.status);
+  }
+  // Drain any body to release the connection cleanly.
+  await notifResult.response.text().catch(() => "");
 
-  // 3) tools/list
-  const listResp = await mcpFetch(
+  // ---- 3) tools/list ----
+  const listResult = await mcpFetchWithOneRetry(
+    sid,
     { jsonrpc: "2.0", id: 2, method: "tools/list" },
-    { accessToken: usedToken, protocolVersion: negotiated, sessionIdHeader: mcpSessionId },
+    {
+      accessToken: notifResult.usedToken,
+      protocolVersion: negotiated,
+      sessionIdHeader: mcpSessionId,
+    },
   );
+  const listResp = listResult.response;
   if (!listResp.ok) {
-    const text = await listResp.text().catch(() => "");
-    throw new Error(`tools/list failed: ${listResp.status} ${text.slice(0, 200)}`);
+    await listResp.text().catch(() => "");
+    fail("mcp_tools_list_failed", listResp.status);
   }
   const listParsed = await readMcpResponse(listResp);
-  if (!listParsed || listParsed.error) {
-    throw new Error(`tools/list error: ${listParsed?.error?.message ?? "no response"}`);
-  }
-  const tools =
-    ((listParsed.result as { tools?: Array<{ name: string; description?: string }> })?.tools ??
-      []) as Array<{ name: string; description?: string }>;
+  if (!listParsed || listParsed.error) fail("mcp_tools_list_failed", listResp.status);
+  const rawTools = (listParsed as JsonRpcResponse).result as
+    | { tools?: Array<{ name?: unknown; description?: unknown }> }
+    | undefined;
+  const toolsIn = rawTools?.tools;
+  if (!Array.isArray(toolsIn)) fail("mcp_tools_list_failed", listResp.status);
+  const tools = (toolsIn as Array<{ name?: unknown; description?: unknown }>)
+    .filter((x): x is { name: string; description?: string } => typeof x?.name === "string")
+    .map((x) => ({
+      name: x.name,
+      description: typeof x.description === "string" ? x.description : undefined,
+    }));
+
   return { negotiatedProtocolVersion: negotiated, tools };
 }

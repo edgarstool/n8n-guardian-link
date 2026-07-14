@@ -1,16 +1,23 @@
 import { createFileRoute, Link } from "@tanstack/react-router";
 import { SiteShell } from "@/components/site/SiteShell";
 import { StatusPanel } from "@/components/site/StatusPanel";
+import { isErrorCategory } from "@/lib/n8n/errors";
 
 type Status = "success" | "error" | "cancelled";
 
 export const Route = createFileRoute("/oauth/n8n/result")({
-  validateSearch: (s: Record<string, unknown>) => ({
-    status: (typeof s.status === "string" ? s.status : "error") as Status,
-    tools: typeof s.tools === "string" ? s.tools : undefined,
-    protocol: typeof s.protocol === "string" ? s.protocol : undefined,
-    reason: typeof s.reason === "string" ? s.reason : undefined,
-  }),
+  validateSearch: (s: Record<string, unknown>) => {
+    const status: Status =
+      s.status === "success" || s.status === "cancelled" ? s.status : "error";
+    const reason =
+      typeof s.reason === "string" && isErrorCategory(s.reason) ? s.reason : undefined;
+    return {
+      status,
+      tools: typeof s.tools === "string" ? s.tools : undefined,
+      protocol: typeof s.protocol === "string" ? s.protocol : undefined,
+      reason,
+    };
+  },
   head: () => ({
     meta: [
       { title: "n8n 授權結果｜EDGAR'S Tools" },

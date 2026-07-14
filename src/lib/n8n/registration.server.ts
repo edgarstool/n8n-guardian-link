@@ -1,6 +1,9 @@
 // Client registration resolver: preconfigured → CIMD → DCR → error.
+// Every resolved registration is persisted with putRegistration(issuer, redirectUri, reg)
+// so the callback can retrieve it via getRegistration(issuer, redirectUri).
 
 import { getEnv } from "./env.server";
+import { CategorizedError, logCategory } from "./errors.server";
 import {
   getRegistration,
   putRegistration,
@@ -30,7 +33,7 @@ export async function resolveClientRegistration(
 
   // 1) Preconfigured
   if (env.N8N_CLIENT_ID) {
-    return {
+    const reg: ClientRegistration = {
       client_id: env.N8N_CLIENT_ID,
       client_secret: env.N8N_CLIENT_SECRET,
       token_endpoint_auth_method: pickAuthMethod(
@@ -39,15 +42,19 @@ export async function resolveClientRegistration(
       ),
       registered_via: "preconfigured",
     };
+    await putRegistration(metadata.issuer, redirectUri, reg);
+    return reg;
   }
 
   // 2) CIMD (Client ID Metadata Document)
   if (metadata.client_id_metadata_document_supported) {
-    return {
+    const reg: ClientRegistration = {
       client_id: env.CLIENT_METADATA_URL,
       token_endpoint_auth_method: "none",
       registered_via: "cimd",
     };
+    await putRegistration(metadata.issuer, redirectUri, reg);
+    return reg;
   }
 
   // 3) Cached DCR
@@ -56,9 +63,8 @@ export async function resolveClientRegistration(
 
   // 4) Fresh DCR
   if (!metadata.registration_endpoint) {
-    throw new Error(
-      "missing-client-registration: AS does not advertise CIMD or registration_endpoint, and no N8N_CLIENT_ID is set.",
-    );
+    logCategory("registration", "missing_registration");
+    throw new CategorizedError("missing_registration");
   }
 
   const body = {
@@ -80,8 +86,8 @@ export async function resolveClientRegistration(
     body: JSON.stringify(body),
   });
   if (!r.ok) {
-    const text = await r.text().catch(() => "");
-    throw new Error(`Dynamic client registration failed: ${r.status} ${text.slice(0, 200)}`);
+    logCategory("registration", "missing_registration", r.status);
+    throw new CategorizedError("missing_registration", r.status);
   }
   const data = (await r.json()) as {
     client_id: string;

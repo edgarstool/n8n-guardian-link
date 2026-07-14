@@ -1,7 +1,10 @@
 // Cloudflare KV accessor for OAuth persistent state.
-// Falls back to in-memory Map for local dev if the binding is unavailable.
+// Fails closed in production if the OAUTH_STORE binding is missing.
+// Falls back to an in-memory Map only in development.
 
 import { getRequest } from "@tanstack/react-start/server";
+import { CategorizedError } from "./errors.server";
+import { isProduction } from "./env.server";
 
 type KVLike = {
   get(key: string, opts?: { type?: "json" | "text" }): Promise<unknown>;
@@ -45,24 +48,44 @@ function readCloudflareEnv(): Record<string, unknown> | undefined {
     const ctx = req?.context as { cloudflare?: { env?: Record<string, unknown> } } | undefined;
     if (ctx?.cloudflare?.env) return ctx.cloudflare.env;
   } catch {
-    // no active request
+    /* no active request */
   }
-  // Fallback: some runtimes expose env on globalThis
   const g = globalThis as unknown as { OAUTH_STORE?: KVLike };
   if (g.OAUTH_STORE) return { OAUTH_STORE: g.OAUTH_STORE };
   return undefined;
 }
 
-let warned = false;
-export function getKV(): KVLike {
+function resolveBoundKV(): KVLike | null {
   const env = readCloudflareEnv();
   const kv = env?.OAUTH_STORE as KVLike | undefined;
   if (kv && typeof kv.get === "function" && typeof kv.put === "function") return kv;
-  if (!warned) {
+  return null;
+}
+
+export type StorageBackend = "kv" | "memory";
+
+/** True only when the real Cloudflare OAUTH_STORE binding is active. */
+export function isKvBindingActive(): boolean {
+  return resolveBoundKV() !== null;
+}
+
+export function getStorageBackend(): StorageBackend {
+  return isKvBindingActive() ? "kv" : "memory";
+}
+
+let warnedDev = false;
+export function getKV(): KVLike {
+  const kv = resolveBoundKV();
+  if (kv) return kv;
+  if (isProduction()) {
+    // Fail closed. Do not silently persist tokens to per-instance memory.
+    throw new CategorizedError("missing_configuration");
+  }
+  if (!warnedDev) {
     console.warn(
-      "[n8n-oauth] OAUTH_STORE KV binding not found; using in-memory fallback (dev only, non-persistent).",
+      "[n8n-oauth] OAUTH_STORE KV binding not found; using in-memory fallback (dev only).",
     );
-    warned = true;
+    warnedDev = true;
   }
   return memoryKV;
 }
