@@ -67,6 +67,18 @@ const REASON_COPY: Record<ErrorCategory, { zh: string; en: string }> = {
     zh: "伺服器端組態尚未完成，請聯絡管理員。",
     en: "Server-side configuration is incomplete. Please contact the administrator.",
   },
+  mcp_tools_call_failed: {
+    zh: "MCP tools/call 呼叫失敗。",
+    en: "MCP tools/call request failed.",
+  },
+  unauthorized: {
+    zh: "缺少或無效的 API 金鑰。",
+    en: "Missing or invalid API key.",
+  },
+  invalid_request: {
+    zh: "請求格式錯誤。",
+    en: "Malformed request.",
+  },
 };
 
 function isKnownCategory(v: string | undefined): v is ErrorCategory {
