@@ -1,8 +1,6 @@
 // Minimal MCP client for the n8n Instance-level MCP endpoint.
-// Emits only allowlisted error categories. Applies exactly one
-// token refresh + one retry per authenticated request, independently.
 
-import { requireN8nMcpUrl } from "./env.server";
+import { requireSessionMcpUrl } from "./env.server";
 import { CategorizedError, ErrorCategory, logCategory } from "./errors.server";
 import { getTokens, putTokens } from "./kv.server";
 import { forceRefreshTokens, getValidAccessToken } from "./tokens.server";
@@ -55,8 +53,7 @@ type CallOptions = {
   sessionIdHeader?: string;
 };
 
-async function mcpFetch(body: unknown, opts: CallOptions): Promise<Response> {
-  const url = requireN8nMcpUrl();
+async function mcpFetch(url: string, body: unknown, opts: CallOptions): Promise<Response> {
   const headers: Record<string, string> = {
     "content-type": "application/json",
     accept: "application/json, text/event-stream",
@@ -67,24 +64,19 @@ async function mcpFetch(body: unknown, opts: CallOptions): Promise<Response> {
   return fetch(url, { method: "POST", headers, body: JSON.stringify(body) });
 }
 
-/**
- * Send one authenticated MCP request. On HTTP 401, apply exactly one
- * token refresh and exactly one retry, then return whatever the retry
- * produced. Independent per-request budget.
- */
 async function mcpFetchWithOneRetry(
   sid: string,
+  url: string,
   body: unknown,
   base: CallOptions,
 ): Promise<{ response: Response; usedToken: string }> {
   let token = base.accessToken;
-  let r = await mcpFetch(body, { ...base, accessToken: token });
+  let r = await mcpFetch(url, body, { ...base, accessToken: token });
   if (r.status !== 401) return { response: r, usedToken: token };
-  // Drain and discard the 401 body before retrying — never log it.
   await r.text().catch(() => "");
   const refreshed = await forceRefreshTokens(sid);
   token = refreshed.access_token;
-  r = await mcpFetch(body, { ...base, accessToken: token });
+  r = await mcpFetch(url, body, { ...base, accessToken: token });
   return { response: r, usedToken: token };
 }
 
@@ -99,9 +91,9 @@ function fail(category: ErrorCategory, status?: number): never {
 }
 
 export async function runInitializeAndListTools(sid: string): Promise<McpToolsListResult> {
+  const url = await requireSessionMcpUrl(sid);
   const t = await getValidAccessToken(sid);
 
-  // ---- 1) initialize ----
   const initBody = {
     jsonrpc: "2.0",
     id: 1,
@@ -112,7 +104,7 @@ export async function runInitializeAndListTools(sid: string): Promise<McpToolsLi
       clientInfo: { name: "edgars-tools-n8n-connector", version: "1.0.0" },
     },
   };
-  const initResult = await mcpFetchWithOneRetry(sid, initBody, {
+  const initResult = await mcpFetchWithOneRetry(sid, url, initBody, {
     accessToken: t.access_token,
   });
   const initResp = initResult.response;
@@ -135,11 +127,9 @@ export async function runInitializeAndListTools(sid: string): Promise<McpToolsLi
     await putTokens(sid, { ...stored, negotiated_mcp_protocol_version: negotiated });
   }
 
-  // ---- 2) notifications/initialized ----
-  // Body may be empty per JSON-RPC notification semantics, but the HTTP
-  // status MUST be 2xx. Any non-2xx fails the flow.
   const notifResult = await mcpFetchWithOneRetry(
     sid,
+    url,
     { jsonrpc: "2.0", method: "notifications/initialized" },
     {
       accessToken: initResult.usedToken,
@@ -151,12 +141,11 @@ export async function runInitializeAndListTools(sid: string): Promise<McpToolsLi
     await notifResult.response.text().catch(() => "");
     fail("mcp_initialized_notification_failed", notifResult.response.status);
   }
-  // Drain any body to release the connection cleanly.
   await notifResult.response.text().catch(() => "");
 
-  // ---- 3) tools/list ----
   const listResult = await mcpFetchWithOneRetry(
     sid,
+    url,
     { jsonrpc: "2.0", id: 2, method: "tools/list" },
     {
       accessToken: notifResult.usedToken,

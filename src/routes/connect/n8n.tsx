@@ -1,12 +1,14 @@
 import { createFileRoute, useRouter } from "@tanstack/react-router";
-import { useMutation, useQuery } from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useServerFn } from "@tanstack/react-start";
+import { useEffect, useState } from "react";
 import { SiteShell } from "@/components/site/SiteShell";
 import { ERROR_CATEGORIES, type ErrorCategory } from "@/lib/n8n/errors";
 import {
   disconnectN8n,
   getN8nConnectionStatus,
   listN8nMcpTools,
+  saveN8nMcpUrl,
   startN8nOAuth,
 } from "@/lib/n8n/n8n-oauth.functions";
 
@@ -36,7 +38,7 @@ const REASON_ZH: Record<ErrorCategory, string> = {
   mcp_initialized_notification_failed: "MCP initialized 通知未被接受。",
   mcp_tools_list_failed: "MCP tools/list 呼叫失敗。",
   needs_reauth: "工作階段已失效，請重新授權。",
-  missing_configuration: "伺服器組態不完整，請聯絡管理員。",
+  missing_configuration: "尚未儲存 Instance MCP URL，請先於下方輸入並儲存。",
 };
 
 function categoryLabel(code: ErrorCategory): string {
@@ -49,10 +51,12 @@ function isCategory(v: string | undefined): v is ErrorCategory {
 
 function ConnectPage() {
   const router = useRouter();
+  const qc = useQueryClient();
   const start = useServerFn(startN8nOAuth);
   const disconnect = useServerFn(disconnectN8n);
   const listTools = useServerFn(listN8nMcpTools);
   const getStatus = useServerFn(getN8nConnectionStatus);
+  const saveUrl = useServerFn(saveN8nMcpUrl);
 
   const statusQuery = useQuery({
     queryKey: ["n8n-connection"],
@@ -67,6 +71,33 @@ function ConnectPage() {
       !(statusQuery.data as { needsReauth?: boolean }).needsReauth,
   });
 
+  const [mcpInput, setMcpInput] = useState("");
+  const [saveError, setSaveError] = useState<string | null>(null);
+  const [copied, setCopied] = useState(false);
+
+  useEffect(() => {
+    if (statusQuery.data?.mcpUrl && !mcpInput) setMcpInput(statusQuery.data.mcpUrl);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [statusQuery.data?.mcpUrl]);
+
+  const saveMutation = useMutation({
+    mutationFn: (mcpUrl: string) => saveUrl({ data: { mcpUrl } }),
+    onSuccess: (data) => {
+      if (!data.ok) {
+        const map: Record<string, string> = {
+          invalid_url: "網址格式不正確，請貼上完整的 Instance Server URL。",
+          https_required: "正式環境必須使用 HTTPS。",
+          missing_configuration: "伺服器儲存服務尚未就緒，請稍後重試。",
+        };
+        setSaveError(map[data.error] ?? "儲存失敗");
+        return;
+      }
+      setSaveError(null);
+      qc.invalidateQueries({ queryKey: ["n8n-connection"] });
+    },
+    onError: () => setSaveError("儲存失敗，請稍後重試。"),
+  });
+
   const startMutation = useMutation({
     mutationFn: () => start(),
     onSuccess: (data) => {
@@ -79,10 +110,24 @@ function ConnectPage() {
     onSuccess: () => router.invalidate(),
   });
 
-  const connected = statusQuery.data?.connected;
-  const storage = statusQuery.data?.storage;
-  const configured =
-    statusQuery.data && "configured" in statusQuery.data ? statusQuery.data.configured : true;
+  const status = statusQuery.data;
+  const connected = status?.connected;
+  const storage = status?.storage;
+  const configured = status && "configured" in status ? status.configured : true;
+  const savedMcpUrl = status?.mcpUrl;
+  const callbackUrl = status?.callbackUrl ?? "";
+  const canStart = Boolean(savedMcpUrl) && configured !== false;
+
+  async function copyCallback() {
+    if (!callbackUrl) return;
+    try {
+      await navigator.clipboard.writeText(callbackUrl);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 1500);
+    } catch {
+      /* clipboard unavailable */
+    }
+  }
 
   return (
     <SiteShell>
@@ -96,55 +141,102 @@ function ConnectPage() {
 
         <section className="mt-8 rounded-xl border border-white/10 bg-white/[0.03] p-6">
           <h2 className="text-lg font-medium text-white">
-            取得 Instance MCP URL / Get the Instance MCP URL
+            步驟 1｜取得 Instance MCP URL
           </h2>
           <p className="mt-2 text-sm text-white/70">
-            請至 n8n → Settings → Instance-level MCP → Connection details → OAuth，
-            將「完整的 Instance Server URL」原封不動複製過來。不要修改路徑或結尾斜線。
+            前往 n8n → Settings → Instance-level MCP → Connection details → OAuth，
+            將「完整的 Instance Server URL」原封不動複製過來（路徑與結尾斜線都保留）。
           </p>
-          <p className="mt-2 text-sm text-white/55">
-            In n8n, go to Settings → Instance-level MCP → Connection details → OAuth, and copy the
-            complete Instance Server URL exactly. Do not modify its path or trailing slash.
+          <p className="mt-2 text-xs text-white/50">
+            In n8n → Settings → Instance-level MCP → Connection details → OAuth, copy the exact
+            Instance Server URL — do not modify its path or trailing slash.
           </p>
+
+          <label className="mt-4 block text-xs font-medium text-white/70">
+            Instance Server URL
+          </label>
+          <input
+            type="url"
+            value={mcpInput}
+            onChange={(e) => setMcpInput(e.target.value)}
+            placeholder="https://your-instance.n8n.cloud/mcp-server/http"
+            className="mt-1 w-full rounded-md border border-white/15 bg-black/40 px-3 py-2 text-sm font-mono text-white placeholder:text-white/30 focus:border-white/40 focus:outline-none"
+          />
+          <div className="mt-3 flex flex-wrap items-center gap-3">
+            <button
+              onClick={() => saveMutation.mutate(mcpInput)}
+              disabled={saveMutation.isPending || !mcpInput.trim()}
+              className="rounded-md border border-white/20 bg-white/10 px-4 py-2 text-sm font-semibold text-white hover:bg-white/15 disabled:opacity-60"
+            >
+              {saveMutation.isPending ? "儲存中…" : "儲存 MCP URL"}
+            </button>
+            {savedMcpUrl && (
+              <span className="text-xs text-emerald-400">已儲存 / Saved</span>
+            )}
+            {saveError && <span className="text-xs text-red-400">{saveError}</span>}
+          </div>
         </section>
 
+        {savedMcpUrl && (
+          <section className="mt-6 rounded-xl border border-white/10 bg-white/[0.03] p-6">
+            <h2 className="text-lg font-medium text-white">
+              步驟 2｜將此 Callback URL 加入 n8n
+            </h2>
+            <p className="mt-2 text-sm text-white/70">
+              請在 n8n Instance-level MCP 的 OAuth 設定中，將以下 Callback URL 加入
+              「Allowed OAuth Redirect URLs」清單。
+            </p>
+            <div className="mt-3 flex items-center gap-2">
+              <code className="flex-1 truncate rounded-md border border-white/10 bg-black/40 px-3 py-2 text-sm text-white">
+                {callbackUrl}
+              </code>
+              <button
+                onClick={copyCallback}
+                className="rounded-md border border-white/20 bg-white/10 px-3 py-2 text-xs font-semibold text-white hover:bg-white/15"
+              >
+                {copied ? "已複製" : "複製"}
+              </button>
+            </div>
+          </section>
+        )}
+
         <section className="mt-6 rounded-xl border border-white/10 bg-white/[0.03] p-6">
-          <h2 className="text-lg font-medium text-white">連線狀態 / Connection status</h2>
+          <h2 className="text-lg font-medium text-white">
+            步驟 3｜開始授權 / Connection status
+          </h2>
           <div className="mt-3 text-sm text-white/70">
             {statusQuery.isLoading && <p>載入中… / Loading…</p>}
-            {statusQuery.data && !statusQuery.data.connected && configured && (
+            {status && !status.connected && configured && !savedMcpUrl && (
+              <p>請先於步驟 1 儲存 Instance MCP URL。</p>
+            )}
+            {status && !status.connected && configured && savedMcpUrl && (
               <p>尚未連接 / Not connected</p>
             )}
-            {statusQuery.data && !configured && (
+            {status && !configured && (
               <p className="text-red-400">
-                伺服器組態不完整 / Server-side configuration is incomplete (missing_configuration)
+                伺服器儲存尚未就緒 / Server-side storage is not ready (missing_configuration)
               </p>
             )}
-            {statusQuery.data && statusQuery.data.connected === true && (
+            {status && status.connected === true && (
               <div className="space-y-1">
                 <p>
                   已連接至 / Connected to:{" "}
-                  <span className="font-mono text-white">{statusQuery.data.issuer}</span>
+                  <span className="font-mono text-white">{status.issuer}</span>
                 </p>
-                {statusQuery.data.negotiatedProtocolVersion && (
+                {status.negotiatedProtocolVersion && (
                   <p>
                     協定版本 / Protocol:{" "}
-                    <span className="font-mono">{statusQuery.data.negotiatedProtocolVersion}</span>
+                    <span className="font-mono">{status.negotiatedProtocolVersion}</span>
                   </p>
                 )}
-                {statusQuery.data.needsReauth && (
+                {status.needsReauth && (
                   <p className="text-amber-400">需要重新授權 / Reauthorization required</p>
                 )}
               </div>
             )}
             {storage && (
               <p className="mt-3 text-xs text-white/50">
-                儲存後端 / Storage:{" "}
-                <span className="font-mono">
-                  {storage === "kv"
-                    ? "Cloudflare KV (OAUTH_STORE)"
-                    : "in-memory (development only)"}
-                </span>
+                儲存後端 / Storage: <span className="font-mono">{storage}</span>
               </p>
             )}
           </div>
@@ -152,7 +244,7 @@ function ConnectPage() {
           <div className="mt-6 flex flex-wrap gap-3">
             <button
               onClick={() => startMutation.mutate()}
-              disabled={startMutation.isPending || !configured}
+              disabled={startMutation.isPending || !canStart}
               className="rounded-md bg-[oklch(0.7_0.15_60)] px-5 py-2.5 text-sm font-semibold text-black transition hover:brightness-110 disabled:opacity-60"
             >
               {startMutation.isPending

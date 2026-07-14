@@ -1,11 +1,12 @@
-// MCP + OAuth discovery pipeline. See RFC 8414, RFC 9728, MCP auth spec.
+// MCP + OAuth discovery pipeline. Accepts the mcpUrl explicitly so the
+// caller can pass a per-session URL saved by the user.
 
-import { getEnv, requireN8nMcpUrl } from "./env.server";
+import { getEnv } from "./env.server";
 import { CategorizedError, logCategory } from "./errors.server";
-import { putASMetadata, type ASMetadata, type DiscoveryResult } from "./kv.server";
+import { putASMetadata } from "./kv.server";
+import type { ASMetadata, DiscoveryResult } from "./storage-types";
 
 function parseWwwAuthenticate(header: string): Record<string, string> {
-  // Very small parser: scheme param="value", param2="value2"
   const out: Record<string, string> = {};
   const idx = header.indexOf(" ");
   const rest = idx === -1 ? "" : header.slice(idx + 1);
@@ -25,7 +26,6 @@ async function tryFetchProtectedResourceMetadata(mcpUrl: string): Promise<{
   authorization_servers: string[];
   resource?: string;
 } | null> {
-  // 1) unauthenticated probe → WWW-Authenticate resource_metadata
   try {
     const probe = await fetch(mcpUrl, {
       method: "POST",
@@ -53,7 +53,6 @@ async function tryFetchProtectedResourceMetadata(mcpUrl: string): Promise<{
     /* fall through */
   }
 
-  // 2) RFC 9728 well-known paths
   const u = new URL(mcpUrl);
   const candidates: string[] = [
     `${u.origin}/.well-known/oauth-protected-resource${u.pathname === "/" ? "" : u.pathname}`,
@@ -108,11 +107,9 @@ async function fetchAuthorizationServerMetadata(issuer: string): Promise<ASMetad
   throw new CategorizedError("discovery_failed");
 }
 
-export async function discoverN8n(): Promise<DiscoveryResult> {
+export async function discoverN8n(mcpUrl: string): Promise<DiscoveryResult> {
   try {
     const env = getEnv();
-    const mcpUrl = requireN8nMcpUrl();
-
     const prm = await tryFetchProtectedResourceMetadata(mcpUrl);
     let issuer: string;
     let resource: string;
@@ -120,7 +117,6 @@ export async function discoverN8n(): Promise<DiscoveryResult> {
       issuer = prm.authorization_servers[0].replace(/\/$/, "");
       resource = prm.resource ?? mcpUrl;
     } else {
-      // No PRM → assume the MCP origin is also the AS (fallback).
       issuer = new URL(mcpUrl).origin;
       resource = mcpUrl;
     }

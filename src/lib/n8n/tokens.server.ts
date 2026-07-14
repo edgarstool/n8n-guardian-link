@@ -1,6 +1,6 @@
-// Token exchange + refresh. Emits only allowlisted error categories.
+// Token exchange + refresh. Uses the redirect_uri stored on each token row
+// so refresh works without depending on the current request origin.
 
-import { getEnv } from "./env.server";
 import { CategorizedError, logCategory } from "./errors.server";
 import {
   getASMetadata,
@@ -57,7 +57,6 @@ export async function exchangeAuthorizationCode(args: {
   const { headers, body } = buildTokenAuth(args.registration, form);
   const r = await fetch(args.tokenEndpoint, { method: "POST", headers, body });
   if (!r.ok) {
-    // Drain body to avoid resource leaks; do NOT log or return its contents.
     await r.text().catch(() => "");
     logCategory("token_exchange", "token_exchange_failed", r.status);
     throw new CategorizedError("token_exchange_failed", r.status);
@@ -87,7 +86,10 @@ export async function refreshAccessToken(args: {
 
 export function tokenResponseToStored(
   t: TokenResponse,
-  previous: Pick<StoredTokens, "issuer" | "resource" | "client_id" | "token_endpoint_auth_method"> &
+  previous: Pick<
+    StoredTokens,
+    "issuer" | "resource" | "client_id" | "token_endpoint_auth_method" | "redirect_uri"
+  > &
     Partial<Pick<StoredTokens, "connected_at" | "negotiated_mcp_protocol_version">>,
 ): StoredTokens {
   const now = Date.now();
@@ -100,6 +102,7 @@ export function tokenResponseToStored(
     scope: t.scope,
     issuer: previous.issuer,
     resource: previous.resource,
+    redirect_uri: previous.redirect_uri,
     client_id: previous.client_id,
     token_endpoint_auth_method: previous.token_endpoint_auth_method,
     negotiated_mcp_protocol_version: previous.negotiated_mcp_protocol_version,
@@ -116,11 +119,6 @@ export async function getValidAccessToken(sid: string): Promise<StoredTokens> {
   return refreshStoredTokens(sid, t);
 }
 
-/**
- * Force a refresh for the current sid regardless of expiry. Used by the
- * MCP 401 retry path. Returns the refreshed StoredTokens or throws
- * CategorizedError('needs_reauth').
- */
 export async function forceRefreshTokens(sid: string): Promise<StoredTokens> {
   const t = await getTokens(sid);
   if (!t) throw new CategorizedError("needs_reauth");
@@ -132,9 +130,8 @@ async function refreshStoredTokens(sid: string, t: StoredTokens): Promise<Stored
     await putTokens(sid, { ...t, needs_reauth: true });
     throw new CategorizedError("needs_reauth");
   }
-  const env = getEnv();
   const meta = await getASMetadata(t.issuer);
-  const reg = await getRegistration(t.issuer, env.REDIRECT_URI);
+  const reg = await getRegistration(t.issuer, t.redirect_uri);
   if (!meta || !reg) {
     await putTokens(sid, { ...t, needs_reauth: true });
     throw new CategorizedError("needs_reauth");
@@ -149,6 +146,7 @@ async function refreshStoredTokens(sid: string, t: StoredTokens): Promise<Stored
     const next = tokenResponseToStored(resp, {
       issuer: t.issuer,
       resource: t.resource,
+      redirect_uri: t.redirect_uri,
       client_id: t.client_id,
       token_endpoint_auth_method: t.token_endpoint_auth_method,
       connected_at: t.connected_at,

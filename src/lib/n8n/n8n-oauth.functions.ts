@@ -1,9 +1,9 @@
 // Server functions for the n8n OAuth connect flow.
-// All returned error payloads are allowlisted category strings.
 
 import { createServerFn } from "@tanstack/react-start";
+import { z } from "zod";
 import { discoverN8n } from "./discovery.server";
-import { getEnv } from "./env.server";
+import { getEnv, isProduction } from "./env.server";
 import {
   CategorizedError,
   ErrorCategory,
@@ -14,14 +14,56 @@ import {
   deleteTokens,
   getStorageBackend,
   getTokens,
-  isKvBindingActive,
   type StorageBackend,
 } from "./kv.server";
+import {
+  ensureSessionRow,
+  getSessionMcpUrl,
+  putPendingAuth,
+  putSessionMcpUrl,
+} from "./db.server";
 import { runInitializeAndListTools } from "./mcp.server";
-import { setPendingAuthCookie } from "./pending-cookie.server";
 import { generatePkceVerifier, generateState, pkceChallengeS256 } from "./pkce.server";
 import { resolveClientRegistration } from "./registration.server";
 import { clearSessionCookie, ensureSessionId } from "./session.server";
+
+// ---------- Save MCP URL ----------
+
+export type SaveMcpUrlResult =
+  | { ok: true; mcpUrl: string; callbackUrl: string }
+  | { ok: false; error: "invalid_url" | "https_required" | "missing_configuration" };
+
+export const saveN8nMcpUrl = createServerFn({ method: "POST" })
+  .inputValidator((input: unknown) =>
+    z.object({ mcpUrl: z.string().min(1).max(2048) }).parse(input),
+  )
+  .handler(async ({ data }): Promise<SaveMcpUrlResult> => {
+    const raw = data.mcpUrl.trim();
+    let parsed: URL;
+    try {
+      parsed = new URL(raw);
+    } catch {
+      return { ok: false, error: "invalid_url" };
+    }
+    if (isProduction() && parsed.protocol !== "https:") {
+      return { ok: false, error: "https_required" };
+    }
+    if (parsed.protocol !== "https:" && parsed.protocol !== "http:") {
+      return { ok: false, error: "invalid_url" };
+    }
+    try {
+      const sid = ensureSessionId();
+      await ensureSessionRow(sid);
+      // Preserve the URL exactly as pasted (path + trailing slash intact).
+      await putSessionMcpUrl(sid, raw);
+      return { ok: true, mcpUrl: raw, callbackUrl: getEnv().REDIRECT_URI };
+    } catch (e) {
+      logCategory("saveN8nMcpUrl", toCategory(e, "missing_configuration"));
+      return { ok: false, error: "missing_configuration" };
+    }
+  });
+
+// ---------- Start OAuth ----------
 
 export type StartResult =
   | { ok: true; authorizeUrl: string; issuer: string; registeredVia: string }
@@ -31,20 +73,26 @@ export const startN8nOAuth = createServerFn({ method: "POST" }).handler(
   async (): Promise<StartResult> => {
     try {
       const env = getEnv();
-      const discovery = await discoverN8n();
+      const sid = ensureSessionId();
+      await ensureSessionRow(sid);
+      const mcpUrl = await getSessionMcpUrl(sid);
+      if (!mcpUrl) return { ok: false, error: "missing_configuration" };
+
+      const discovery = await discoverN8n(mcpUrl);
       const registration = await resolveClientRegistration(discovery.metadata, env.REDIRECT_URI);
 
-      ensureSessionId();
       const state = generateState();
       const verifier = generatePkceVerifier();
       const challenge = await pkceChallengeS256(verifier);
 
-      await setPendingAuthCookie({
+      await putPendingAuth({
         state,
+        sid,
         verifier,
         issuer: discovery.issuer,
         resource: discovery.resource,
         redirectUri: env.REDIRECT_URI,
+        mcpUrl,
         createdAt: Date.now(),
       });
 
@@ -73,6 +121,8 @@ export const startN8nOAuth = createServerFn({ method: "POST" }).handler(
   },
 );
 
+// ---------- Status ----------
+
 export type ConnectionStatus =
   | {
       connected: true;
@@ -81,8 +131,16 @@ export type ConnectionStatus =
       negotiatedProtocolVersion?: string;
       needsReauth?: boolean;
       storage: StorageBackend;
+      mcpUrl?: string;
+      callbackUrl: string;
     }
-  | { connected: false; storage: StorageBackend; configured: boolean };
+  | {
+      connected: false;
+      storage: StorageBackend;
+      configured: boolean;
+      mcpUrl?: string;
+      callbackUrl: string;
+    };
 
 export const getN8nConnectionStatus = createServerFn({ method: "GET" }).handler(
   async (): Promise<ConnectionStatus> => {
@@ -90,17 +148,18 @@ export const getN8nConnectionStatus = createServerFn({ method: "GET" }).handler(
     let configured = true;
     try {
       storage = getStorageBackend();
-      // Touch env to detect missing_configuration; do not surface raw error.
-      getEnv();
     } catch (e) {
       if (e instanceof CategorizedError && e.category === "missing_configuration") {
         configured = false;
       }
     }
+    const callbackUrl = getEnv().REDIRECT_URI;
     try {
       const sid = ensureSessionId();
+      await ensureSessionRow(sid);
+      const mcpUrl = (await getSessionMcpUrl(sid)) ?? undefined;
       const t = await getTokens(sid);
-      if (!t) return { connected: false, storage, configured };
+      if (!t) return { connected: false, storage, configured, mcpUrl, callbackUrl };
       return {
         connected: true,
         issuer: t.issuer,
@@ -108,12 +167,16 @@ export const getN8nConnectionStatus = createServerFn({ method: "GET" }).handler(
         negotiatedProtocolVersion: t.negotiated_mcp_protocol_version,
         needsReauth: t.needs_reauth,
         storage,
+        mcpUrl,
+        callbackUrl,
       };
     } catch {
-      return { connected: false, storage, configured };
+      return { connected: false, storage, configured, callbackUrl };
     }
   },
 );
+
+// ---------- Disconnect ----------
 
 export const disconnectN8n = createServerFn({ method: "POST" }).handler(async () => {
   try {
@@ -125,6 +188,8 @@ export const disconnectN8n = createServerFn({ method: "POST" }).handler(async ()
   clearSessionCookie();
   return { ok: true } as const;
 });
+
+// ---------- List tools ----------
 
 export type ListToolsResult =
   | {
@@ -152,9 +217,7 @@ export const listN8nMcpTools = createServerFn({ method: "POST" }).handler(
   },
 );
 
-export type StorageStatus = { storage: StorageBackend; kvBindingActive: boolean };
+export type StorageStatus = { storage: StorageBackend };
 export const getStorageStatus = createServerFn({ method: "GET" }).handler(
-  async (): Promise<StorageStatus> => {
-    return { storage: getStorageBackend(), kvBindingActive: isKvBindingActive() };
-  },
+  async (): Promise<StorageStatus> => ({ storage: getStorageBackend() }),
 );
