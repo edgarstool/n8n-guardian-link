@@ -14,6 +14,9 @@ export const ERROR_CATEGORIES = [
   "mcp_tools_list_failed",
   "needs_reauth",
   "missing_configuration",
+  "mcp_tools_call_failed",
+  "unauthorized",
+  "invalid_request",
 ] as const;
 
 export type ErrorCategory = (typeof ERROR_CATEGORIES)[number];

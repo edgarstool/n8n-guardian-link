@@ -14,6 +14,39 @@ export type Database = {
   }
   public: {
     Tables: {
+      n8n_api_keys: {
+        Row: {
+          created_at: string
+          id: string
+          key_hash: string
+          label: string | null
+          last_used_at: string | null
+          prefix: string
+          revoked_at: string | null
+          sid: string
+        }
+        Insert: {
+          created_at?: string
+          id?: string
+          key_hash: string
+          label?: string | null
+          last_used_at?: string | null
+          prefix: string
+          revoked_at?: string | null
+          sid: string
+        }
+        Update: {
+          created_at?: string
+          id?: string
+          key_hash?: string
+          label?: string | null
+          last_used_at?: string | null
+          prefix?: string
+          revoked_at?: string | null
+          sid?: string
+        }
+        Relationships: []
+      }
       n8n_as_metadata: {
         Row: {
           issuer: string

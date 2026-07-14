@@ -9,12 +9,20 @@
 // Additionally, you should also exclude this file from your linter and/or formatter to prevent it from being checked or modified.
 
 import { Route as rootRouteImport } from './routes/__root'
+import { Route as OpenapiDotjsonRouteImport } from './routes/openapi[.]json'
 import { Route as IndexRouteImport } from './routes/index'
 import { Route as OauthClientMetadataDotjsonRouteImport } from './routes/oauth/client-metadata[.]json'
 import { Route as ConnectN8nRouteImport } from './routes/connect/n8n'
 import { Route as OauthN8nResultRouteImport } from './routes/oauth/n8n/result'
 import { Route as OauthN8nCallbackRouteImport } from './routes/oauth/n8n/callback'
+import { Route as ApiN8nToolsRouteImport } from './routes/api/n8n/tools'
+import { Route as ApiN8nCallRouteImport } from './routes/api/n8n/call'
 
+const OpenapiDotjsonRoute = OpenapiDotjsonRouteImport.update({
+  id: '/openapi.json',
+  path: '/openapi.json',
+  getParentRoute: () => rootRouteImport,
+} as any)
 const IndexRoute = IndexRouteImport.update({
   id: '/',
   path: '/',
@@ -41,26 +49,45 @@ const OauthN8nCallbackRoute = OauthN8nCallbackRouteImport.update({
   path: '/oauth/n8n/callback',
   getParentRoute: () => rootRouteImport,
 } as any)
+const ApiN8nToolsRoute = ApiN8nToolsRouteImport.update({
+  id: '/api/n8n/tools',
+  path: '/api/n8n/tools',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const ApiN8nCallRoute = ApiN8nCallRouteImport.update({
+  id: '/api/n8n/call',
+  path: '/api/n8n/call',
+  getParentRoute: () => rootRouteImport,
+} as any)
 
 export interface FileRoutesByFullPath {
   '/': typeof IndexRoute
+  '/openapi.json': typeof OpenapiDotjsonRoute
   '/connect/n8n': typeof ConnectN8nRoute
   '/oauth/client-metadata.json': typeof OauthClientMetadataDotjsonRoute
+  '/api/n8n/call': typeof ApiN8nCallRoute
+  '/api/n8n/tools': typeof ApiN8nToolsRoute
   '/oauth/n8n/callback': typeof OauthN8nCallbackRoute
   '/oauth/n8n/result': typeof OauthN8nResultRoute
 }
 export interface FileRoutesByTo {
   '/': typeof IndexRoute
+  '/openapi.json': typeof OpenapiDotjsonRoute
   '/connect/n8n': typeof ConnectN8nRoute
   '/oauth/client-metadata.json': typeof OauthClientMetadataDotjsonRoute
+  '/api/n8n/call': typeof ApiN8nCallRoute
+  '/api/n8n/tools': typeof ApiN8nToolsRoute
   '/oauth/n8n/callback': typeof OauthN8nCallbackRoute
   '/oauth/n8n/result': typeof OauthN8nResultRoute
 }
 export interface FileRoutesById {
   __root__: typeof rootRouteImport
   '/': typeof IndexRoute
+  '/openapi.json': typeof OpenapiDotjsonRoute
   '/connect/n8n': typeof ConnectN8nRoute
   '/oauth/client-metadata.json': typeof OauthClientMetadataDotjsonRoute
+  '/api/n8n/call': typeof ApiN8nCallRoute
+  '/api/n8n/tools': typeof ApiN8nToolsRoute
   '/oauth/n8n/callback': typeof OauthN8nCallbackRoute
   '/oauth/n8n/result': typeof OauthN8nResultRoute
 }
@@ -68,36 +95,55 @@ export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
   fullPaths:
     | '/'
+    | '/openapi.json'
     | '/connect/n8n'
     | '/oauth/client-metadata.json'
+    | '/api/n8n/call'
+    | '/api/n8n/tools'
     | '/oauth/n8n/callback'
     | '/oauth/n8n/result'
   fileRoutesByTo: FileRoutesByTo
   to:
     | '/'
+    | '/openapi.json'
     | '/connect/n8n'
     | '/oauth/client-metadata.json'
+    | '/api/n8n/call'
+    | '/api/n8n/tools'
     | '/oauth/n8n/callback'
     | '/oauth/n8n/result'
   id:
     | '__root__'
     | '/'
+    | '/openapi.json'
     | '/connect/n8n'
     | '/oauth/client-metadata.json'
+    | '/api/n8n/call'
+    | '/api/n8n/tools'
     | '/oauth/n8n/callback'
     | '/oauth/n8n/result'
   fileRoutesById: FileRoutesById
 }
 export interface RootRouteChildren {
   IndexRoute: typeof IndexRoute
+  OpenapiDotjsonRoute: typeof OpenapiDotjsonRoute
   ConnectN8nRoute: typeof ConnectN8nRoute
   OauthClientMetadataDotjsonRoute: typeof OauthClientMetadataDotjsonRoute
+  ApiN8nCallRoute: typeof ApiN8nCallRoute
+  ApiN8nToolsRoute: typeof ApiN8nToolsRoute
   OauthN8nCallbackRoute: typeof OauthN8nCallbackRoute
   OauthN8nResultRoute: typeof OauthN8nResultRoute
 }
 
 declare module '@tanstack/react-router' {
   interface FileRoutesByPath {
+    '/openapi.json': {
+      id: '/openapi.json'
+      path: '/openapi.json'
+      fullPath: '/openapi.json'
+      preLoaderRoute: typeof OpenapiDotjsonRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/': {
       id: '/'
       path: '/'
@@ -133,13 +179,30 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof OauthN8nCallbackRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/api/n8n/tools': {
+      id: '/api/n8n/tools'
+      path: '/api/n8n/tools'
+      fullPath: '/api/n8n/tools'
+      preLoaderRoute: typeof ApiN8nToolsRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/api/n8n/call': {
+      id: '/api/n8n/call'
+      path: '/api/n8n/call'
+      fullPath: '/api/n8n/call'
+      preLoaderRoute: typeof ApiN8nCallRouteImport
+      parentRoute: typeof rootRouteImport
+    }
   }
 }
 
 const rootRouteChildren: RootRouteChildren = {
   IndexRoute: IndexRoute,
+  OpenapiDotjsonRoute: OpenapiDotjsonRoute,
   ConnectN8nRoute: ConnectN8nRoute,
   OauthClientMetadataDotjsonRoute: OauthClientMetadataDotjsonRoute,
+  ApiN8nCallRoute: ApiN8nCallRoute,
+  ApiN8nToolsRoute: ApiN8nToolsRoute,
   OauthN8nCallbackRoute: OauthN8nCallbackRoute,
   OauthN8nResultRoute: OauthN8nResultRoute,
 }
