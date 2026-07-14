@@ -1,8 +1,9 @@
 import { createFileRoute, redirect } from "@tanstack/react-router";
 import { getEnv } from "@/lib/n8n/env.server";
-import { getASMetadata, getRegistration, putTokens, takePendingAuth } from "@/lib/n8n/kv.server";
+import { getASMetadata, getRegistration, putTokens } from "@/lib/n8n/kv.server";
 import { runInitializeAndListTools } from "@/lib/n8n/mcp.server";
-import { getSessionId } from "@/lib/n8n/session.server";
+import { takePendingAuthCookie } from "@/lib/n8n/pending-cookie.server";
+import { ensureSessionId } from "@/lib/n8n/session.server";
 import { exchangeAuthorizationCode, tokenResponseToStored } from "@/lib/n8n/tokens.server";
 
 async function handleCallback(request: Request): Promise<Response> {
@@ -10,10 +11,12 @@ async function handleCallback(request: Request): Promise<Response> {
   const code = url.searchParams.get("code");
   const state = url.searchParams.get("state");
   const errorParam = url.searchParams.get("error");
-  const errorDescription = url.searchParams.get("error_description") ?? "";
 
   const env = getEnv();
   const resultBase = `${env.APP_BASE_URL}/oauth/n8n/result`;
+
+  // Always consume the pending cookie exactly once, regardless of outcome.
+  const pending = await takePendingAuthCookie();
 
   if (errorParam === "access_denied" || errorParam === "user_cancelled") {
     return Response.redirect(`${resultBase}?status=cancelled`, 302);
@@ -27,19 +30,15 @@ async function handleCallback(request: Request): Promise<Response> {
   if (!code || !state) {
     return Response.redirect(`${resultBase}?status=error&reason=missing_code_or_state`, 302);
   }
-
-  const sid = getSessionId();
-  if (!sid) {
-    return Response.redirect(`${resultBase}?status=error&reason=missing_session`, 302);
-  }
-
-  const pending = await takePendingAuth(sid);
   if (!pending) {
     return Response.redirect(`${resultBase}?status=error&reason=state_expired`, 302);
   }
   if (pending.state !== state) {
     return Response.redirect(`${resultBase}?status=error&reason=state_mismatch`, 302);
   }
+
+  // Session ID for KV token storage.
+  const sid = ensureSessionId();
 
   const meta = await getASMetadata(pending.issuer);
   const reg = await getRegistration(pending.issuer, pending.redirectUri);
