@@ -77,14 +77,20 @@ export const Route = createRootRouteWithContext<{ queryClient: QueryClient }>()(
     meta: [
       { charSet: "utf-8" },
       { name: "viewport", content: "width=device-width, initial-scale=1" },
-      { title: "Lovable App" },
-      { name: "description", content: "Lovable Generated Project" },
-      { name: "author", content: "Lovable" },
-      { property: "og:title", content: "Lovable App" },
-      { property: "og:description", content: "Lovable Generated Project" },
+      { title: "EDGAR'S Tools｜n8n MCP OAuth 連接器" },
+      {
+        name: "description",
+        content:
+          "Discovery-driven OAuth 2.1 + PKCE client for n8n Instance-level MCP servers.",
+      },
+      { property: "og:title", content: "EDGAR'S Tools｜n8n MCP OAuth 連接器" },
+      {
+        property: "og:description",
+        content:
+          "Securely connect your n8n Instance-level MCP server via OAuth 2.1 + PKCE.",
+      },
       { property: "og:type", content: "website" },
       { name: "twitter:card", content: "summary_large_image" },
-      { name: "twitter:site", content: "@Lovable" },
     ],
     links: [
       {
