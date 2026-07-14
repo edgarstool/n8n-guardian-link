@@ -98,16 +98,6 @@ export type ClientRegistration = {
   registration_access_token?: string;
 };
 
-export type PendingAuth = {
-  state: string;
-  verifier: string;
-  issuer: string;
-  resource: string;
-  redirectUri: string;
-  clientId: string;
-  createdAt: number;
-};
-
 export type StoredTokens = {
   access_token: string;
   refresh_token?: string;
@@ -126,7 +116,6 @@ export type StoredTokens = {
 const K = {
   asMeta: (issuer: string) => `as-meta:${issuer}`,
   registration: (issuer: string, redirect: string) => `client:${issuer}::${redirect}`,
-  pending: (sid: string) => `pending:${sid}`,
   tokens: (sid: string) => `tokens:${sid}`,
 };
 
@@ -150,14 +139,6 @@ export async function getRegistration(
     })) as ClientRegistration | null) ?? null
   );
 }
-
-export async function putPendingAuth(sid: string, p: PendingAuth) {
-  await getKV().put(K.pending(sid), JSON.stringify(p), { expirationTtl: 600 });
-}
-export async function takePendingAuth(sid: string): Promise<PendingAuth | null> {
-  const v = (await getKV().get(K.pending(sid), { type: "json" })) as PendingAuth | null;
-  if (v) await getKV().delete(K.pending(sid));
-  return v ?? null;
 }
 
 export async function putTokens(sid: string, t: StoredTokens) {

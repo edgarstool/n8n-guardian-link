@@ -40,14 +40,21 @@ async function deriveKey(): Promise<CryptoKey> {
   ]);
 }
 
+function toArrayBuffer(a: Uint8Array): ArrayBuffer {
+  return a.buffer.slice(a.byteOffset, a.byteOffset + a.byteLength) as ArrayBuffer;
+}
+
 async function encrypt(data: PendingAuthCookie): Promise<string> {
   const key = await deriveKey();
   const iv = crypto.getRandomValues(new Uint8Array(12));
   const plaintext = new TextEncoder().encode(JSON.stringify(data));
   const cipher = new Uint8Array(
-    await crypto.subtle.encrypt({ name: "AES-GCM", iv }, key, plaintext),
+    await crypto.subtle.encrypt(
+      { name: "AES-GCM", iv: toArrayBuffer(iv) },
+      key,
+      toArrayBuffer(plaintext),
+    ),
   );
-  // Format: v1.<iv_b64u>.<cipher_b64u>
   return `v1.${b64urlEncode(iv)}.${b64urlEncode(cipher)}`;
 }
 
@@ -58,7 +65,11 @@ async function decrypt(token: string): Promise<PendingAuthCookie | null> {
     const iv = b64urlDecode(ivStr);
     const cipher = b64urlDecode(cipherStr);
     const key = await deriveKey();
-    const plain = await crypto.subtle.decrypt({ name: "AES-GCM", iv }, key, cipher);
+    const plain = await crypto.subtle.decrypt(
+      { name: "AES-GCM", iv: toArrayBuffer(iv) },
+      key,
+      toArrayBuffer(cipher),
+    );
     const parsed = JSON.parse(new TextDecoder().decode(plain)) as PendingAuthCookie;
     if (typeof parsed?.state !== "string" || typeof parsed?.verifier !== "string") return null;
     return parsed;
