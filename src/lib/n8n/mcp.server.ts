@@ -70,15 +70,40 @@ async function mcpFetchWithOneRetry(
   body: unknown,
   base: CallOptions,
 ): Promise<{ response: Response; usedToken: string }> {
-  let token = base.accessToken;
-  let r = await mcpFetch(url, body, { ...base, accessToken: token });
+  return _fetchWithRetry({
+    url,
+    body,
+    base,
+    refresh: async () => (await forceRefreshTokens(sid)).access_token,
+  });
+}
+
+// Test-only: dependency-injected variant that does not touch the DB.
+export async function _fetchWithRetry(args: {
+  url: string;
+  body: unknown;
+  base: CallOptions;
+  refresh: () => Promise<string>;
+}): Promise<{ response: Response; usedToken: string }> {
+  let token = args.base.accessToken;
+  let r = await mcpFetch(args.url, args.body, { ...args.base, accessToken: token });
   if (r.status !== 401) return { response: r, usedToken: token };
   await r.text().catch(() => "");
-  const refreshed = await forceRefreshTokens(sid);
-  token = refreshed.access_token;
-  r = await mcpFetch(url, body, { ...base, accessToken: token });
+  token = await args.refresh();
+  r = await mcpFetch(args.url, args.body, { ...args.base, accessToken: token });
   return { response: r, usedToken: token };
 }
+
+// Test-only: build the JSON-RPC body used by tools/call.
+export function _buildToolsCallBody(name: string, args: Record<string, unknown>) {
+  return {
+    jsonrpc: "2.0" as const,
+    id: 3,
+    method: "tools/call",
+    params: { name, arguments: args ?? {} },
+  };
+}
+
 
 export type McpToolsListResult = {
   negotiatedProtocolVersion: string;

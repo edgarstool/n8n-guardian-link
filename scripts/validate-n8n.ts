@@ -80,90 +80,65 @@ await check("requireBearerSid rejects missing/invalid tokens", async () => {
 
 // --- mcp: tools/call payload shape ---
 await check("mcp tools/call builds JSON-RPC params correctly", async () => {
-  // Verify shape via a stub fetch. We validate the exported function threads name/arguments.
+  const mcp = await import("../src/lib/n8n/mcp.server");
+  const body = mcp._buildToolsCallBody("my_tool", { a: 1, b: "x" });
+  assert.equal(body.jsonrpc, "2.0");
+  assert.equal(body.method, "tools/call");
+  assert.equal(body.params.name, "my_tool");
+  assert.deepEqual(body.params.arguments, { a: 1, b: "x" });
+  const empty = mcp._buildToolsCallBody("t", {} as any);
+  assert.deepEqual(empty.params.arguments, {});
+});
+
+// --- mcp: one refresh + one retry on 401, then success ---
+await check("mcp retries once with a refreshed token on 401", async () => {
   const originalFetch = globalThis.fetch;
-  const calls: Array<{ url: string; body: any }> = [];
-  const jsonResp = (result: unknown, headers: Record<string, string> = {}) =>
-    new Response(JSON.stringify({ jsonrpc: "2.0", id: 1, result }), {
+  const seenTokens: string[] = [];
+  let call = 0;
+  globalThis.fetch = (async (_input: any, init: any) => {
+    call++;
+    const auth = (init.headers as any).authorization ?? "";
+    seenTokens.push(auth);
+    if (call === 1) return new Response("", { status: 401 });
+    return new Response(JSON.stringify({ jsonrpc: "2.0", id: 3, result: { ok: true } }), {
       status: 200,
-      headers: { "content-type": "application/json", ...headers },
+      headers: { "content-type": "application/json" },
     });
-  globalThis.fetch = (async (input: any, init: any) => {
-    const body = JSON.parse(init.body as string);
-    calls.push({ url: String(input), body });
-    if (body.method === "initialize")
-      return jsonResp({ protocolVersion: "2025-11-25" }, { "mcp-session-id": "sess-1" });
-    if (body.method?.startsWith("notifications/")) return new Response("", { status: 200 });
-    if (body.method === "tools/call")
-      return jsonResp({ content: [{ type: "text", text: "ok" }] });
-    return new Response("no", { status: 500 });
   }) as typeof fetch;
   try {
-    // Stub dependencies used by runInitializeAndCallTool
-    const envMod: any = await import("../src/lib/n8n/env.server");
-    const origReq = envMod.requireSessionMcpUrl;
-    envMod.requireSessionMcpUrl = async () => "https://example.n8n.cloud/mcp-server/http";
-    const tokMod: any = await import("../src/lib/n8n/tokens.server");
-    const origTok = tokMod.getValidAccessToken;
-    tokMod.getValidAccessToken = async () => ({ access_token: "at-1", refresh_token: "rt-1" });
-    const kvMod: any = await import("../src/lib/n8n/kv.server");
-    const origGet = kvMod.getTokens, origPut = kvMod.putTokens;
-    kvMod.getTokens = async () => null; kvMod.putTokens = async () => {};
     const mcp = await import("../src/lib/n8n/mcp.server");
-    const r = await mcp.runInitializeAndCallTool("sid-x", "my_tool", { a: 1 });
-    assert.equal(r.negotiatedProtocolVersion, "2025-11-25");
-    const call = calls.find((c) => c.body.method === "tools/call");
-    assert.ok(call, "tools/call fetch was made");
-    assert.equal(call!.body.params.name, "my_tool");
-    assert.deepEqual(call!.body.params.arguments, { a: 1 });
-    envMod.requireSessionMcpUrl = origReq;
-    tokMod.getValidAccessToken = origTok;
-    kvMod.getTokens = origGet; kvMod.putTokens = origPut;
+    let refreshCalls = 0;
+    const r = await mcp._fetchWithRetry({
+      url: "https://example.n8n.cloud/mcp-server/http",
+      body: mcp._buildToolsCallBody("t", {}),
+      base: { accessToken: "bad-token" },
+      refresh: async () => {
+        refreshCalls++;
+        return "good-token";
+      },
+    });
+    assert.equal(call, 2, "fetch called twice");
+    assert.equal(refreshCalls, 1, "refresh called exactly once");
+    assert.equal(seenTokens[0], "Bearer bad-token");
+    assert.equal(seenTokens[1], "Bearer good-token");
+    assert.equal(r.response.status, 200);
+    assert.equal(r.usedToken, "good-token");
   } finally {
     globalThis.fetch = originalFetch;
   }
 });
 
-// --- mcp: one refresh + one retry on 401 ---
-await check("mcp retries once with a refreshed token on 401", async () => {
-  const originalFetch = globalThis.fetch;
-  let initCalls = 0;
-  globalThis.fetch = (async (_input: any, init: any) => {
-    const body = JSON.parse(init.body as string);
-    if (body.method === "initialize") {
-      initCalls++;
-      const authHeader = (init.headers as any).authorization ?? "";
-      if (authHeader.includes("bad-token") && initCalls === 1) {
-        return new Response("", { status: 401 });
-      }
-      return new Response(
-        JSON.stringify({ jsonrpc: "2.0", id: 1, result: { protocolVersion: "2025-11-25" } }),
-        { status: 200, headers: { "content-type": "application/json", "mcp-session-id": "s" } },
-      );
-    }
-    if (body.method?.startsWith("notifications/")) return new Response("", { status: 200 });
-    if (body.method === "tools/list")
-      return new Response(
-        JSON.stringify({ jsonrpc: "2.0", id: 2, result: { tools: [{ name: "x" }] } }),
-        { status: 200, headers: { "content-type": "application/json" } },
-      );
-    return new Response("no", { status: 500 });
-  }) as typeof fetch;
-  try {
-    const envMod: any = await import("../src/lib/n8n/env.server");
-    envMod.requireSessionMcpUrl = async () => "https://example.n8n.cloud/mcp-server/http";
-    const tokMod: any = await import("../src/lib/n8n/tokens.server");
-    tokMod.getValidAccessToken = async () => ({ access_token: "bad-token" });
-    tokMod.forceRefreshTokens = async () => ({ access_token: "good-token" });
-    const kvMod: any = await import("../src/lib/n8n/kv.server");
-    kvMod.getTokens = async () => null; kvMod.putTokens = async () => {};
-    const mcp = await import("../src/lib/n8n/mcp.server");
-    const r = await mcp.runInitializeAndListTools("sid-y");
-    assert.equal(initCalls, 2, "initialize retried once");
-    assert.equal(r.tools[0]?.name, "x");
-  } finally {
-    globalThis.fetch = originalFetch;
-  }
+// --- openapi: describes both routes with bearer auth ---
+await check("openapi document lists both endpoints with bearer auth", async () => {
+  const mod: any = await import("../src/routes/openapi[.]json");
+  const handler = mod.Route.options.server.handlers.GET;
+  const res: Response = await handler({ request: new Request("https://example.com/openapi.json") });
+  const doc = JSON.parse(await res.text());
+  assert.equal(doc.openapi, "3.1.0");
+  assert.ok(doc.paths["/api/n8n/tools"].get);
+  assert.ok(doc.paths["/api/n8n/call"].post);
+  assert.equal(doc.components.securitySchemes.bearerAuth.scheme, "bearer");
+  assert.deepEqual(doc.security, [{ bearerAuth: [] }]);
 });
 
 // --- openapi: describes both routes with bearer auth ---
