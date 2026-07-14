@@ -34,8 +34,8 @@ function Home() {
           安全連接您的 n8n Instance MCP
         </h1>
         <p className="mt-4 max-w-2xl text-base text-white/70 sm:text-lg">
-          Discovery-driven OAuth 2.1 + PKCE client. Tokens live server-side in Cloudflare KV. No
-          codes, tokens, or client secrets ever leave the worker.
+          Discovery-driven OAuth 2.1 + PKCE client. Tokens are held server-side. No codes,
+          tokens, or client secrets ever leave the worker.
         </p>
         <div className="mt-8 flex flex-wrap gap-3">
           <Link
@@ -52,7 +52,21 @@ function Home() {
           </a>
         </div>
 
-        <section className="mt-16 grid gap-4 sm:grid-cols-3">
+        <section className="mt-12 rounded-xl border border-white/10 bg-white/[0.03] p-6">
+          <h2 className="text-lg font-semibold text-white">
+            如何取得 Instance MCP URL / Getting your Instance MCP URL
+          </h2>
+          <p className="mt-2 text-sm text-white/70">
+            請至 n8n → Settings → Instance-level MCP → Connection details → OAuth，
+            將完整的 Instance Server URL 原封不動複製過來。請勿修改其路徑或結尾斜線。
+          </p>
+          <p className="mt-2 text-sm text-white/55">
+            In n8n, open Settings → Instance-level MCP → Connection details → OAuth, and copy the
+            complete Instance Server URL exactly. Do not modify its path or trailing slash.
+          </p>
+        </section>
+
+        <section className="mt-8 grid gap-4 sm:grid-cols-3">
           {[
             {
               t: "Discovery",
@@ -63,14 +77,11 @@ function Home() {
               b: "Enforced. Refuses AS that do not advertise S256.",
             },
             {
-              t: "KV-backed",
-              b: "Tokens, refresh, DCR clients persisted in Cloudflare KV.",
+              t: "Server-side tokens",
+              b: "Access / refresh tokens live in the worker, never in the browser.",
             },
           ].map((f) => (
-            <div
-              key={f.t}
-              className="rounded-xl border border-white/10 bg-white/[0.03] p-5"
-            >
+            <div key={f.t} className="rounded-xl border border-white/10 bg-white/[0.03] p-5">
               <h3 className="text-sm font-semibold text-white">{f.t}</h3>
               <p className="mt-2 text-sm text-white/60">{f.b}</p>
             </div>
