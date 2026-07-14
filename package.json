@@ -9,7 +9,9 @@
     "build:dev": "vite build --mode development",
     "preview": "vite preview",
     "lint": "eslint .",
-    "format": "prettier --write ."
+    "format": "prettier --write .",
+    "cf:dev": "wrangler dev -c wrangler.toml",
+    "cf:deploy": "bun run build && wrangler deploy -c wrangler.toml"
   },
   "dependencies": {
     "@hookform/resolvers": "^5.2.2",

@@ -1,0 +1,31 @@
+# Self-managed Cloudflare Workers deployment for the n8n MCP OAuth connector.
+# This file overrides dist/server/wrangler.json produced by the build.
+#
+# Secrets — set with Wrangler (never commit these values):
+#   wrangler secret put SESSION_SECRET   # >=32 bytes of random entropy
+#   wrangler secret put N8N_MCP_URL      # exact Instance Server URL from n8n
+#
+# One-time infra:
+#   wrangler kv namespace create OAUTH_STORE
+#   -> copy the returned id into kv_namespaces[].id below (REPLACE_WITH_KV_ID)
+#
+# Custom domain connect.edgars.tools is attached via Cloudflare dashboard:
+#   Workers & Pages -> this worker -> Domains & Routes -> Add Custom Domain.
+
+name = "edgars-n8n-connector"
+main = "dist/server/index.mjs"
+compatibility_date = "2026-07-14"
+compatibility_flags = ["nodejs_compat"]
+no_bundle = true
+
+[assets]
+binding = "ASSETS"
+directory = "dist/client"
+
+[[kv_namespaces]]
+binding = "OAUTH_STORE"
+id = "REPLACE_WITH_KV_ID"
+
+[vars]
+APP_BASE_URL = "https://connect.edgars.tools"
+NODE_ENV = "production"
