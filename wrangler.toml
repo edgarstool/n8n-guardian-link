@@ -9,8 +9,10 @@
 #   wrangler kv namespace create OAUTH_STORE
 #   -> copy the returned id into kv_namespaces[].id below (REPLACE_WITH_KV_ID)
 #
-# Custom domain connect.edgars.tools is attached via Cloudflare dashboard:
-#   Workers & Pages -> this worker -> Domains & Routes -> Add Custom Domain.
+# Custom domain is managed by Wrangler. Cloudflare will create the DNS record
+# and certificate automatically when the Worker is first deployed.
+# WARNING: deployment will fail if connect.edgars.tools already has a conflicting
+# CNAME record. Remove any conflicting record at your DNS provider before deploying.
 
 name = "edgars-n8n-connector"
 main = "dist/server/index.mjs"
@@ -29,3 +31,7 @@ id = "REPLACE_WITH_KV_ID"
 [vars]
 APP_BASE_URL = "https://connect.edgars.tools"
 NODE_ENV = "production"
+
+[[routes]]
+pattern = "connect.edgars.tools"
+custom_domain = true
