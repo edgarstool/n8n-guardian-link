@@ -1,4 +1,4 @@
-import { ERROR_CATEGORIES, type ErrorCategory } from "@/lib/n8n/errors.server";
+import { ERROR_CATEGORIES, type ErrorCategory } from "@/lib/n8n/errors";
 
 type Props = {
   status: "success" | "error" | "cancelled";
