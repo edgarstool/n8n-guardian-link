@@ -139,7 +139,6 @@ export async function getRegistration(
     })) as ClientRegistration | null) ?? null
   );
 }
-}
 
 export async function putTokens(sid: string, t: StoredTokens) {
   await getKV().put(K.tokens(sid), JSON.stringify(t));
