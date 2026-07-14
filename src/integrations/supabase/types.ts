@@ -14,7 +14,117 @@ export type Database = {
   }
   public: {
     Tables: {
-      [_ in never]: never
+      n8n_as_metadata: {
+        Row: {
+          issuer: string
+          metadata: Json
+          updated_at: string
+        }
+        Insert: {
+          issuer: string
+          metadata: Json
+          updated_at?: string
+        }
+        Update: {
+          issuer?: string
+          metadata?: Json
+          updated_at?: string
+        }
+        Relationships: []
+      }
+      n8n_client_registrations: {
+        Row: {
+          issuer: string
+          redirect_uri: string
+          registration: Json
+          updated_at: string
+        }
+        Insert: {
+          issuer: string
+          redirect_uri: string
+          registration: Json
+          updated_at?: string
+        }
+        Update: {
+          issuer?: string
+          redirect_uri?: string
+          registration?: Json
+          updated_at?: string
+        }
+        Relationships: []
+      }
+      n8n_pending_auth: {
+        Row: {
+          created_at: string
+          issuer: string
+          mcp_url: string
+          redirect_uri: string
+          resource: string
+          sid: string
+          state: string
+          verifier: string
+        }
+        Insert: {
+          created_at?: string
+          issuer: string
+          mcp_url: string
+          redirect_uri: string
+          resource: string
+          sid: string
+          state: string
+          verifier: string
+        }
+        Update: {
+          created_at?: string
+          issuer?: string
+          mcp_url?: string
+          redirect_uri?: string
+          resource?: string
+          sid?: string
+          state?: string
+          verifier?: string
+        }
+        Relationships: []
+      }
+      n8n_sessions: {
+        Row: {
+          created_at: string
+          mcp_url: string | null
+          sid: string
+          updated_at: string
+        }
+        Insert: {
+          created_at?: string
+          mcp_url?: string | null
+          sid: string
+          updated_at?: string
+        }
+        Update: {
+          created_at?: string
+          mcp_url?: string | null
+          sid?: string
+          updated_at?: string
+        }
+        Relationships: []
+      }
+      n8n_tokens: {
+        Row: {
+          data: Json
+          sid: string
+          updated_at: string
+        }
+        Insert: {
+          data: Json
+          sid: string
+          updated_at?: string
+        }
+        Update: {
+          data?: Json
+          sid?: string
+          updated_at?: string
+        }
+        Relationships: []
+      }
     }
     Views: {
       [_ in never]: never
