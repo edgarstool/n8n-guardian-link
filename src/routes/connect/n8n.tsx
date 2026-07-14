@@ -5,12 +5,16 @@ import { useEffect, useState } from "react";
 import { SiteShell } from "@/components/site/SiteShell";
 import { ERROR_CATEGORIES, type ErrorCategory } from "@/lib/n8n/errors";
 import {
+  createN8nApiKey,
   disconnectN8n,
   getN8nConnectionStatus,
+  listN8nApiKeys,
   listN8nMcpTools,
+  revokeN8nApiKey,
   saveN8nMcpUrl,
   startN8nOAuth,
 } from "@/lib/n8n/n8n-oauth.functions";
+
 
 export const Route = createFileRoute("/connect/n8n")({
   head: () => ({
@@ -39,6 +43,9 @@ const REASON_ZH: Record<ErrorCategory, string> = {
   mcp_tools_list_failed: "MCP tools/list 呼叫失敗。",
   needs_reauth: "工作階段已失效，請重新授權。",
   missing_configuration: "尚未儲存 Instance MCP URL，請先於下方輸入並儲存。",
+  mcp_tools_call_failed: "MCP tools/call 呼叫失敗。",
+  unauthorized: "缺少或無效的 API 金鑰。",
+  invalid_request: "請求格式錯誤。",
 };
 
 function categoryLabel(code: ErrorCategory): string {
@@ -57,6 +64,9 @@ function ConnectPage() {
   const listTools = useServerFn(listN8nMcpTools);
   const getStatus = useServerFn(getN8nConnectionStatus);
   const saveUrl = useServerFn(saveN8nMcpUrl);
+  const listKeys = useServerFn(listN8nApiKeys);
+  const createKey = useServerFn(createN8nApiKey);
+  const revokeKey = useServerFn(revokeN8nApiKey);
 
   const statusQuery = useQuery({
     queryKey: ["n8n-connection"],
@@ -306,7 +316,178 @@ function ConnectPage() {
               : "mcp_tools_list_failed"}
           </p>
         )}
+
+        {connected && (
+          <ApiKeysPanel
+            listKeys={listKeys}
+            createKey={createKey}
+            revokeKey={revokeKey}
+          />
+        )}
       </main>
     </SiteShell>
+  );
+}
+
+type ApiKeysPanelProps = {
+  listKeys: () => Promise<Awaited<ReturnType<typeof listN8nApiKeys>>>;
+  createKey: (opts: { data: { label?: string } }) => Promise<Awaited<ReturnType<typeof createN8nApiKey>>>;
+  revokeKey: (opts: { data: { id: string } }) => Promise<{ ok: boolean }>;
+};
+
+function ApiKeysPanel({ listKeys, createKey, revokeKey }: ApiKeysPanelProps) {
+  const qc = useQueryClient();
+  const origin = typeof window !== "undefined" ? window.location.origin : "";
+  const apiBase = origin;
+  const openapiUrl = `${origin}/openapi.json`;
+  const toolsUrl = `${origin}/api/n8n/tools`;
+  const callUrl = `${origin}/api/n8n/call`;
+
+  const keysQuery = useQuery({
+    queryKey: ["n8n-api-keys"],
+    queryFn: () => listKeys(),
+  });
+
+  const [label, setLabel] = useState("");
+  const [newSecret, setNewSecret] = useState<string | null>(null);
+
+  const createMutation = useMutation({
+    mutationFn: (l: string) => createKey({ data: { label: l } }),
+    onSuccess: (r) => {
+      if (r.ok) {
+        setNewSecret(r.secret);
+        setLabel("");
+        qc.invalidateQueries({ queryKey: ["n8n-api-keys"] });
+      }
+    },
+  });
+
+  const revokeMutation = useMutation({
+    mutationFn: (id: string) => revokeKey({ data: { id } }),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ["n8n-api-keys"] }),
+  });
+
+  const placeholder = "YOUR_API_KEY";
+  const displaySecret = newSecret ?? placeholder;
+  const curlTools = `curl -H "Authorization: Bearer ${displaySecret}" ${toolsUrl}`;
+  const curlCall = `curl -X POST ${callUrl} \\\n  -H "Authorization: Bearer ${displaySecret}" \\\n  -H "content-type: application/json" \\\n  -d '{"name":"<tool-name>","arguments":{}}'`;
+
+  const keys = keysQuery.data?.ok ? keysQuery.data.keys : [];
+
+  return (
+    <section className="mt-8 rounded-xl border border-white/10 bg-white/[0.03] p-6">
+      <h2 className="text-lg font-medium text-white">
+        HTTP / OpenAPI 介接 / HTTP adapter
+      </h2>
+      <p className="mt-1 text-xs text-white/60">
+        瀏覽器代理與 ECS 可透過個人 API 金鑰以 HTTP Bearer 呼叫同一組 n8n 工具。
+      </p>
+
+      <dl className="mt-4 grid gap-2 text-xs">
+        <div className="flex flex-wrap items-center gap-2">
+          <dt className="w-28 text-white/50">API base</dt>
+          <dd className="flex-1 truncate font-mono text-white">{apiBase}</dd>
+        </div>
+        <div className="flex flex-wrap items-center gap-2">
+          <dt className="w-28 text-white/50">OpenAPI</dt>
+          <dd className="flex-1 truncate font-mono text-white">
+            <a href={openapiUrl} className="underline hover:text-emerald-300" target="_blank" rel="noreferrer">
+              {openapiUrl}
+            </a>
+          </dd>
+        </div>
+        <div className="flex flex-wrap items-center gap-2">
+          <dt className="w-28 text-white/50">GET tools</dt>
+          <dd className="flex-1 truncate font-mono text-white">{toolsUrl}</dd>
+        </div>
+        <div className="flex flex-wrap items-center gap-2">
+          <dt className="w-28 text-white/50">POST call</dt>
+          <dd className="flex-1 truncate font-mono text-white">{callUrl}</dd>
+        </div>
+      </dl>
+
+      <div className="mt-6">
+        <h3 className="text-sm font-medium text-white">個人 API 金鑰 / Personal keys</h3>
+        <div className="mt-3 flex flex-wrap gap-2">
+          <input
+            value={label}
+            onChange={(e) => setLabel(e.target.value)}
+            placeholder="標籤（選填） / Label (optional)"
+            className="min-w-[220px] flex-1 rounded-md border border-white/15 bg-black/40 px-3 py-2 text-sm text-white placeholder:text-white/30 focus:border-white/40 focus:outline-none"
+          />
+          <button
+            onClick={() => createMutation.mutate(label)}
+            disabled={createMutation.isPending}
+            className="rounded-md border border-white/20 bg-white/10 px-4 py-2 text-sm font-semibold text-white hover:bg-white/15 disabled:opacity-60"
+          >
+            {createMutation.isPending ? "建立中…" : "建立金鑰 / Create key"}
+          </button>
+        </div>
+
+        {newSecret && (
+          <div className="mt-3 rounded-md border border-emerald-500/40 bg-emerald-500/10 p-3">
+            <p className="text-xs font-semibold text-emerald-300">
+              金鑰僅顯示一次，請立即複製保存 / Copy this key now — it will not be shown again.
+            </p>
+            <div className="mt-2 flex items-center gap-2">
+              <code className="flex-1 break-all rounded bg-black/50 px-2 py-1 text-xs text-white">
+                {newSecret}
+              </code>
+              <button
+                onClick={() => navigator.clipboard?.writeText(newSecret)}
+                className="rounded-md border border-white/20 bg-white/10 px-2 py-1 text-xs text-white hover:bg-white/15"
+              >
+                複製 / Copy
+              </button>
+              <button
+                onClick={() => setNewSecret(null)}
+                className="rounded-md border border-white/15 bg-white/5 px-2 py-1 text-xs text-white/80 hover:bg-white/10"
+              >
+                我已複製 / Done
+              </button>
+            </div>
+          </div>
+        )}
+
+        <ul className="mt-4 space-y-2">
+          {keys.length === 0 && (
+            <li className="text-xs text-white/50">尚未建立任何 API 金鑰。</li>
+          )}
+          {keys.map((k) => (
+            <li
+              key={k.id}
+              className="flex flex-wrap items-center justify-between gap-2 rounded-md border border-white/10 bg-black/30 px-3 py-2 text-xs"
+            >
+              <div className="flex-1">
+                <div className="font-mono text-white">{k.prefix}…</div>
+                <div className="text-white/50">
+                  {k.label ?? "未命名"} · 建立於 {new Date(k.created_at).toLocaleString()}
+                  {k.revoked_at ? " · 已撤銷" : ""}
+                </div>
+              </div>
+              {!k.revoked_at && (
+                <button
+                  onClick={() => revokeMutation.mutate(k.id)}
+                  disabled={revokeMutation.isPending}
+                  className="rounded-md border border-red-400/40 bg-red-500/10 px-2 py-1 text-xs text-red-200 hover:bg-red-500/20"
+                >
+                  撤銷 / Revoke
+                </button>
+              )}
+            </li>
+          ))}
+        </ul>
+      </div>
+
+      <div className="mt-6">
+        <h3 className="text-sm font-medium text-white">範例請求 / Example requests</h3>
+        <pre className="mt-2 overflow-x-auto rounded-md border border-white/10 bg-black/40 p-3 text-[11px] leading-relaxed text-white/90">
+{curlTools}
+        </pre>
+        <pre className="mt-2 overflow-x-auto rounded-md border border-white/10 bg-black/40 p-3 text-[11px] leading-relaxed text-white/90">
+{curlCall}
+        </pre>
+      </div>
+    </section>
   );
 }

@@ -221,3 +221,63 @@ export type StorageStatus = { storage: StorageBackend };
 export const getStorageStatus = createServerFn({ method: "GET" }).handler(
   async (): Promise<StorageStatus> => ({ storage: getStorageBackend() }),
 );
+
+// ---------- API keys (session-scoped) ----------
+
+import {
+  createApiKey as createApiKeyRow,
+  listApiKeys as listApiKeyRows,
+  revokeApiKey as revokeApiKeyRow,
+  type ApiKeyRow,
+} from "./api-keys.server";
+
+export type ListApiKeysResult = { ok: true; keys: ApiKeyRow[] } | { ok: false; error: ErrorCategory };
+
+export const listN8nApiKeys = createServerFn({ method: "GET" }).handler(
+  async (): Promise<ListApiKeysResult> => {
+    try {
+      const sid = ensureSessionId();
+      await ensureSessionRow(sid);
+      const keys = await listApiKeyRows(sid);
+      return { ok: true, keys };
+    } catch (e) {
+      logCategory("listN8nApiKeys", toCategory(e, "missing_configuration"));
+      return { ok: false, error: "missing_configuration" };
+    }
+  },
+);
+
+export type CreateApiKeyResult =
+  | { ok: true; id: string; secret: string; prefix: string; label: string | null }
+  | { ok: false; error: ErrorCategory };
+
+export const createN8nApiKey = createServerFn({ method: "POST" })
+  .inputValidator((input: unknown) =>
+    z.object({ label: z.string().max(100).optional() }).parse(input),
+  )
+  .handler(async ({ data }): Promise<CreateApiKeyResult> => {
+    try {
+      const sid = ensureSessionId();
+      await ensureSessionRow(sid);
+      // Require a live n8n connection before minting a key.
+      const t = await getTokens(sid);
+      if (!t) return { ok: false, error: "needs_reauth" };
+      const created = await createApiKeyRow(sid, data.label ?? null);
+      return { ok: true, ...created };
+    } catch (e) {
+      logCategory("createN8nApiKey", toCategory(e, "missing_configuration"));
+      return { ok: false, error: "missing_configuration" };
+    }
+  });
+
+export const revokeN8nApiKey = createServerFn({ method: "POST" })
+  .inputValidator((input: unknown) => z.object({ id: z.string().uuid() }).parse(input))
+  .handler(async ({ data }): Promise<{ ok: boolean }> => {
+    try {
+      const sid = ensureSessionId();
+      const ok = await revokeApiKeyRow(sid, data.id);
+      return { ok };
+    } catch {
+      return { ok: false };
+    }
+  });

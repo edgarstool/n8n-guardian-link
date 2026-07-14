@@ -174,3 +174,83 @@ export async function runInitializeAndListTools(sid: string): Promise<McpToolsLi
 
   return { negotiatedProtocolVersion: negotiated, tools };
 }
+
+/** Perform initialize + initialized + tools/call in a single session. */
+export async function runInitializeAndCallTool(
+  sid: string,
+  toolName: string,
+  toolArgs: Record<string, unknown>,
+): Promise<{ negotiatedProtocolVersion: string; result: unknown }> {
+  const url = await requireSessionMcpUrl(sid);
+  const t = await getValidAccessToken(sid);
+
+  const initBody = {
+    jsonrpc: "2.0",
+    id: 1,
+    method: "initialize",
+    params: {
+      protocolVersion: LATEST_MCP_VERSION,
+      capabilities: {},
+      clientInfo: { name: "edgars-tools-n8n-connector", version: "1.0.0" },
+    },
+  };
+  const initRes = await mcpFetchWithOneRetry(sid, url, initBody, {
+    accessToken: t.access_token,
+  });
+  if (!initRes.response.ok) {
+    await initRes.response.text().catch(() => "");
+    fail("mcp_initialize_failed", initRes.response.status);
+  }
+  const mcpSessionId = initRes.response.headers.get("mcp-session-id") ?? undefined;
+  const parsedInit = await readMcpResponse(initRes.response);
+  if (!parsedInit || parsedInit.error) fail("mcp_initialize_failed", initRes.response.status);
+  const initResult = (parsedInit as JsonRpcResponse).result as
+    | { protocolVersion?: string }
+    | undefined;
+  const negotiated = initResult?.protocolVersion ?? LATEST_MCP_VERSION;
+  if (!(SUPPORTED_MCP_VERSIONS as readonly string[]).includes(negotiated)) {
+    fail("mcp_initialize_failed", initRes.response.status);
+  }
+
+  const stored = await getTokens(sid);
+  if (stored) await putTokens(sid, { ...stored, negotiated_mcp_protocol_version: negotiated });
+
+  const notifRes = await mcpFetchWithOneRetry(
+    sid,
+    url,
+    { jsonrpc: "2.0", method: "notifications/initialized" },
+    { accessToken: initRes.usedToken, protocolVersion: negotiated, sessionIdHeader: mcpSessionId },
+  );
+  if (!notifRes.response.ok) {
+    await notifRes.response.text().catch(() => "");
+    fail("mcp_initialized_notification_failed", notifRes.response.status);
+  }
+  await notifRes.response.text().catch(() => "");
+
+  const callRes = await mcpFetchWithOneRetry(
+    sid,
+    url,
+    {
+      jsonrpc: "2.0",
+      id: 3,
+      method: "tools/call",
+      params: { name: toolName, arguments: toolArgs ?? {} },
+    },
+    {
+      accessToken: notifRes.usedToken,
+      protocolVersion: negotiated,
+      sessionIdHeader: mcpSessionId,
+    },
+  );
+  if (!callRes.response.ok) {
+    await callRes.response.text().catch(() => "");
+    fail("mcp_tools_call_failed", callRes.response.status);
+  }
+  const parsedCall = await readMcpResponse(callRes.response);
+  if (!parsedCall || parsedCall.error) fail("mcp_tools_call_failed", callRes.response.status);
+  return {
+    negotiatedProtocolVersion: negotiated,
+    result: (parsedCall as JsonRpcResponse).result,
+  };
+}
+
