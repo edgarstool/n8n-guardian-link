@@ -3,13 +3,9 @@
 import { createServerFn } from "@tanstack/react-start";
 import { discoverN8n } from "./discovery.server";
 import { getEnv } from "./env.server";
-import {
-  deleteTokens,
-  getTokens,
-  putPendingAuth,
-  type PendingAuth,
-} from "./kv.server";
+import { deleteTokens, getTokens } from "./kv.server";
 import { runInitializeAndListTools } from "./mcp.server";
+import { setPendingAuthCookie, clearPendingAuthCookie } from "./pending-cookie.server";
 import {
   generatePkceVerifier,
   generateState,
@@ -29,21 +25,20 @@ export const startN8nOAuth = createServerFn({ method: "POST" }).handler(
       const discovery = await discoverN8n();
       const registration = await resolveClientRegistration(discovery.metadata, env.REDIRECT_URI);
 
-      const sid = ensureSessionId();
+      // Ensure a stable session id exists for post-callback KV token lookup.
+      ensureSessionId();
       const state = generateState();
       const verifier = generatePkceVerifier();
       const challenge = await pkceChallengeS256(verifier);
 
-      const pending: PendingAuth = {
+      await setPendingAuthCookie({
         state,
         verifier,
         issuer: discovery.issuer,
         resource: discovery.resource,
         redirectUri: env.REDIRECT_URI,
-        clientId: registration.client_id,
         createdAt: Date.now(),
-      };
-      await putPendingAuth(sid, pending);
+      });
 
       const url = new URL(discovery.metadata.authorization_endpoint);
       url.searchParams.set("response_type", "code");
