@@ -1,10 +1,34 @@
-// Cloudflare KV accessor for OAuth persistent state.
-// Fails closed in production if the OAUTH_STORE binding is missing.
-// Falls back to an in-memory Map only in development.
+// Storage dispatcher for the OAuth Connector.
+// Backend selection order:
+//   1. supabase — when SUPABASE_URL + SUPABASE_SERVICE_ROLE_KEY are set (Lovable Cloud / hosted).
+//   2. kv       — when a Cloudflare Workers OAUTH_STORE binding is active.
+//   3. memory   — dev/test only; never used in production.
 
 import { getRequest } from "@tanstack/react-start/server";
 import { CategorizedError } from "./errors.server";
 import { isProduction } from "./env.server";
+import {
+  deleteTokensDb,
+  getASMetadataDb,
+  getRegistrationDb,
+  getTokensDb,
+  putASMetadataDb,
+  putRegistrationDb,
+  putTokensDb,
+} from "./db.server";
+import type {
+  ASMetadata,
+  ClientRegistration,
+  DiscoveryResult,
+  StoredTokens,
+} from "./storage-types";
+
+export type {
+  ASMetadata,
+  ClientRegistration,
+  DiscoveryResult,
+  StoredTokens,
+};
 
 type KVLike = {
   get(key: string, opts?: { type?: "json" | "text" }): Promise<unknown>;
@@ -12,35 +36,7 @@ type KVLike = {
   delete(key: string): Promise<void>;
 };
 
-const memoryStore = new Map<string, { value: string; expiresAt?: number }>();
-
-const memoryKV: KVLike = {
-  async get(key, opts) {
-    const entry = memoryStore.get(key);
-    if (!entry) return null;
-    if (entry.expiresAt && entry.expiresAt < Date.now()) {
-      memoryStore.delete(key);
-      return null;
-    }
-    if (opts?.type === "json") {
-      try {
-        return JSON.parse(entry.value);
-      } catch {
-        return null;
-      }
-    }
-    return entry.value;
-  },
-  async put(key, value, opts) {
-    memoryStore.set(key, {
-      value,
-      expiresAt: opts?.expirationTtl ? Date.now() + opts.expirationTtl * 1000 : undefined,
-    });
-  },
-  async delete(key) {
-    memoryStore.delete(key);
-  },
-};
+// --- Cloudflare KV detection (preserved for the later hardened path) ---
 
 function readCloudflareEnv(): Record<string, unknown> | undefined {
   try {
@@ -62,113 +58,119 @@ function resolveBoundKV(): KVLike | null {
   return null;
 }
 
-export type StorageBackend = "kv" | "memory";
-
-/** True only when the real Cloudflare OAUTH_STORE binding is active. */
 export function isKvBindingActive(): boolean {
   return resolveBoundKV() !== null;
 }
 
-export function getStorageBackend(): StorageBackend {
-  return isKvBindingActive() ? "kv" : "memory";
+function hasSupabaseConfig(): boolean {
+  return Boolean(process.env.SUPABASE_URL && process.env.SUPABASE_SERVICE_ROLE_KEY);
 }
 
+export type StorageBackend = "supabase" | "kv" | "memory";
+
+export function getStorageBackend(): StorageBackend {
+  if (hasSupabaseConfig()) return "supabase";
+  if (isKvBindingActive()) return "kv";
+  return "memory";
+}
+
+// --- In-memory fallback (dev only) ---
+
+const memoryMeta = new Map<string, ASMetadata>();
+const memoryReg = new Map<string, ClientRegistration>();
+const memoryTokens = new Map<string, StoredTokens>();
 let warnedDev = false;
-export function getKV(): KVLike {
-  const kv = resolveBoundKV();
-  if (kv) return kv;
-  if (isProduction()) {
-    // Fail closed. Do not silently persist tokens to per-instance memory.
-    throw new CategorizedError("missing_configuration");
-  }
-  if (!warnedDev) {
-    console.warn(
-      "[n8n-oauth] OAUTH_STORE KV binding not found; using in-memory fallback (dev only).",
-    );
-    warnedDev = true;
-  }
-  return memoryKV;
+function memoryWarn() {
+  if (warnedDev) return;
+  warnedDev = true;
+  console.warn(
+    "[n8n-oauth] No Supabase or Cloudflare KV storage detected; using in-memory (dev only).",
+  );
+}
+function regKey(issuer: string, redirect: string) {
+  return `${issuer}::${redirect}`;
+}
+
+// --- KV JSON helpers (Cloudflare path) ---
+
+async function kvGet<T>(kv: KVLike, key: string): Promise<T | null> {
+  return ((await kv.get(key, { type: "json" })) as T | null) ?? null;
 }
 
 // --- Typed helpers ---
 
-export type ASMetadata = {
-  issuer: string;
-  authorization_endpoint: string;
-  token_endpoint: string;
-  registration_endpoint?: string;
-  scopes_supported?: string[];
-  code_challenge_methods_supported?: string[];
-  token_endpoint_auth_methods_supported?: string[];
-  grant_types_supported?: string[];
-  response_types_supported?: string[];
-  // MCP/OAuth 2.1 CIMD hint
-  client_id_metadata_document_supported?: boolean;
-};
-
-export type DiscoveryResult = {
-  issuer: string;
-  resource: string; // canonical resource identifier for RFC 8707
-  metadata: ASMetadata;
-};
-
-export type ClientRegistration = {
-  client_id: string;
-  client_secret?: string;
-  token_endpoint_auth_method: "none" | "client_secret_basic" | "client_secret_post";
-  registered_via: "preconfigured" | "cimd" | "dcr";
-  registration_client_uri?: string;
-  registration_access_token?: string;
-};
-
-export type StoredTokens = {
-  access_token: string;
-  refresh_token?: string;
-  token_type: string;
-  expires_at: number; // epoch ms
-  scope?: string;
-  issuer: string;
-  resource: string;
-  client_id: string;
-  token_endpoint_auth_method: ClientRegistration["token_endpoint_auth_method"];
-  negotiated_mcp_protocol_version?: string;
-  connected_at: number;
-  needs_reauth?: boolean;
-};
-
-const K = {
-  asMeta: (issuer: string) => `as-meta:${issuer}`,
-  registration: (issuer: string, redirect: string) => `client:${issuer}::${redirect}`,
-  tokens: (sid: string) => `tokens:${sid}`,
-};
-
-export async function putASMetadata(m: ASMetadata) {
-  await getKV().put(K.asMeta(m.issuer), JSON.stringify(m), { expirationTtl: 3600 });
+export async function putASMetadata(m: ASMetadata): Promise<void> {
+  const backend = getStorageBackend();
+  if (backend === "supabase") return putASMetadataDb(m);
+  const kv = resolveBoundKV();
+  if (kv) return kv.put(`as-meta:${m.issuer}`, JSON.stringify(m), { expirationTtl: 3600 });
+  if (isProduction()) throw new CategorizedError("missing_configuration");
+  memoryWarn();
+  memoryMeta.set(m.issuer, m);
 }
+
 export async function getASMetadata(issuer: string): Promise<ASMetadata | null> {
-  return ((await getKV().get(K.asMeta(issuer), { type: "json" })) as ASMetadata | null) ?? null;
+  const backend = getStorageBackend();
+  if (backend === "supabase") return getASMetadataDb(issuer);
+  const kv = resolveBoundKV();
+  if (kv) return kvGet<ASMetadata>(kv, `as-meta:${issuer}`);
+  if (isProduction()) throw new CategorizedError("missing_configuration");
+  memoryWarn();
+  return memoryMeta.get(issuer) ?? null;
 }
 
-export async function putRegistration(issuer: string, redirectUri: string, c: ClientRegistration) {
-  await getKV().put(K.registration(issuer, redirectUri), JSON.stringify(c));
+export async function putRegistration(
+  issuer: string,
+  redirectUri: string,
+  c: ClientRegistration,
+): Promise<void> {
+  const backend = getStorageBackend();
+  if (backend === "supabase") return putRegistrationDb(issuer, redirectUri, c);
+  const kv = resolveBoundKV();
+  if (kv) return kv.put(`client:${issuer}::${redirectUri}`, JSON.stringify(c));
+  if (isProduction()) throw new CategorizedError("missing_configuration");
+  memoryWarn();
+  memoryReg.set(regKey(issuer, redirectUri), c);
 }
+
 export async function getRegistration(
   issuer: string,
   redirectUri: string,
 ): Promise<ClientRegistration | null> {
-  return (
-    ((await getKV().get(K.registration(issuer, redirectUri), {
-      type: "json",
-    })) as ClientRegistration | null) ?? null
-  );
+  const backend = getStorageBackend();
+  if (backend === "supabase") return getRegistrationDb(issuer, redirectUri);
+  const kv = resolveBoundKV();
+  if (kv) return kvGet<ClientRegistration>(kv, `client:${issuer}::${redirectUri}`);
+  if (isProduction()) throw new CategorizedError("missing_configuration");
+  memoryWarn();
+  return memoryReg.get(regKey(issuer, redirectUri)) ?? null;
 }
 
-export async function putTokens(sid: string, t: StoredTokens) {
-  await getKV().put(K.tokens(sid), JSON.stringify(t));
+export async function putTokens(sid: string, t: StoredTokens): Promise<void> {
+  const backend = getStorageBackend();
+  if (backend === "supabase") return putTokensDb(sid, t);
+  const kv = resolveBoundKV();
+  if (kv) return kv.put(`tokens:${sid}`, JSON.stringify(t));
+  if (isProduction()) throw new CategorizedError("missing_configuration");
+  memoryWarn();
+  memoryTokens.set(sid, t);
 }
+
 export async function getTokens(sid: string): Promise<StoredTokens | null> {
-  return ((await getKV().get(K.tokens(sid), { type: "json" })) as StoredTokens | null) ?? null;
+  const backend = getStorageBackend();
+  if (backend === "supabase") return getTokensDb(sid);
+  const kv = resolveBoundKV();
+  if (kv) return kvGet<StoredTokens>(kv, `tokens:${sid}`);
+  if (isProduction()) throw new CategorizedError("missing_configuration");
+  memoryWarn();
+  return memoryTokens.get(sid) ?? null;
 }
-export async function deleteTokens(sid: string) {
-  await getKV().delete(K.tokens(sid));
+
+export async function deleteTokens(sid: string): Promise<void> {
+  const backend = getStorageBackend();
+  if (backend === "supabase") return deleteTokensDb(sid);
+  const kv = resolveBoundKV();
+  if (kv) return kv.delete(`tokens:${sid}`);
+  if (isProduction()) throw new CategorizedError("missing_configuration");
+  memoryTokens.delete(sid);
 }
