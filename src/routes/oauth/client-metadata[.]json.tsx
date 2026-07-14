@@ -1,7 +1,7 @@
 import { createFileRoute } from "@tanstack/react-router";
 import { getEnv } from "@/lib/n8n/env.server";
 
-export const Route = createFileRoute("/oauth/client-metadata[.]json")({
+export const Route = createFileRoute("/oauth/client-metadata.json")({
   server: {
     handlers: {
       GET: async () => {

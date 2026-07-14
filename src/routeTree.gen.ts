@@ -10,33 +10,90 @@
 
 import { Route as rootRouteImport } from './routes/__root'
 import { Route as IndexRouteImport } from './routes/index'
+import { Route as OauthClientMetadataDotjsonRouteImport } from './routes/oauth/client-metadata[.]json'
+import { Route as ConnectN8nRouteImport } from './routes/connect/n8n'
+import { Route as OauthN8nResultRouteImport } from './routes/oauth/n8n/result'
+import { Route as OauthN8nCallbackRouteImport } from './routes/oauth/n8n/callback'
 
 const IndexRoute = IndexRouteImport.update({
   id: '/',
   path: '/',
   getParentRoute: () => rootRouteImport,
 } as any)
+const OauthClientMetadataDotjsonRoute =
+  OauthClientMetadataDotjsonRouteImport.update({
+    id: '/oauth/client-metadata.json',
+    path: '/oauth/client-metadata.json',
+    getParentRoute: () => rootRouteImport,
+  } as any)
+const ConnectN8nRoute = ConnectN8nRouteImport.update({
+  id: '/connect/n8n',
+  path: '/connect/n8n',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const OauthN8nResultRoute = OauthN8nResultRouteImport.update({
+  id: '/oauth/n8n/result',
+  path: '/oauth/n8n/result',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const OauthN8nCallbackRoute = OauthN8nCallbackRouteImport.update({
+  id: '/oauth/n8n/callback',
+  path: '/oauth/n8n/callback',
+  getParentRoute: () => rootRouteImport,
+} as any)
 
 export interface FileRoutesByFullPath {
   '/': typeof IndexRoute
+  '/connect/n8n': typeof ConnectN8nRoute
+  '/oauth/client-metadata.json': typeof OauthClientMetadataDotjsonRoute
+  '/oauth/n8n/callback': typeof OauthN8nCallbackRoute
+  '/oauth/n8n/result': typeof OauthN8nResultRoute
 }
 export interface FileRoutesByTo {
   '/': typeof IndexRoute
+  '/connect/n8n': typeof ConnectN8nRoute
+  '/oauth/client-metadata.json': typeof OauthClientMetadataDotjsonRoute
+  '/oauth/n8n/callback': typeof OauthN8nCallbackRoute
+  '/oauth/n8n/result': typeof OauthN8nResultRoute
 }
 export interface FileRoutesById {
   __root__: typeof rootRouteImport
   '/': typeof IndexRoute
+  '/connect/n8n': typeof ConnectN8nRoute
+  '/oauth/client-metadata.json': typeof OauthClientMetadataDotjsonRoute
+  '/oauth/n8n/callback': typeof OauthN8nCallbackRoute
+  '/oauth/n8n/result': typeof OauthN8nResultRoute
 }
 export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
-  fullPaths: '/'
+  fullPaths:
+    | '/'
+    | '/connect/n8n'
+    | '/oauth/client-metadata.json'
+    | '/oauth/n8n/callback'
+    | '/oauth/n8n/result'
   fileRoutesByTo: FileRoutesByTo
-  to: '/'
-  id: '__root__' | '/'
+  to:
+    | '/'
+    | '/connect/n8n'
+    | '/oauth/client-metadata.json'
+    | '/oauth/n8n/callback'
+    | '/oauth/n8n/result'
+  id:
+    | '__root__'
+    | '/'
+    | '/connect/n8n'
+    | '/oauth/client-metadata.json'
+    | '/oauth/n8n/callback'
+    | '/oauth/n8n/result'
   fileRoutesById: FileRoutesById
 }
 export interface RootRouteChildren {
   IndexRoute: typeof IndexRoute
+  ConnectN8nRoute: typeof ConnectN8nRoute
+  OauthClientMetadataDotjsonRoute: typeof OauthClientMetadataDotjsonRoute
+  OauthN8nCallbackRoute: typeof OauthN8nCallbackRoute
+  OauthN8nResultRoute: typeof OauthN8nResultRoute
 }
 
 declare module '@tanstack/react-router' {
@@ -48,11 +105,43 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof IndexRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/oauth/client-metadata.json': {
+      id: '/oauth/client-metadata.json'
+      path: '/oauth/client-metadata.json'
+      fullPath: '/oauth/client-metadata.json'
+      preLoaderRoute: typeof OauthClientMetadataDotjsonRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/connect/n8n': {
+      id: '/connect/n8n'
+      path: '/connect/n8n'
+      fullPath: '/connect/n8n'
+      preLoaderRoute: typeof ConnectN8nRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/oauth/n8n/result': {
+      id: '/oauth/n8n/result'
+      path: '/oauth/n8n/result'
+      fullPath: '/oauth/n8n/result'
+      preLoaderRoute: typeof OauthN8nResultRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/oauth/n8n/callback': {
+      id: '/oauth/n8n/callback'
+      path: '/oauth/n8n/callback'
+      fullPath: '/oauth/n8n/callback'
+      preLoaderRoute: typeof OauthN8nCallbackRouteImport
+      parentRoute: typeof rootRouteImport
+    }
   }
 }
 
 const rootRouteChildren: RootRouteChildren = {
   IndexRoute: IndexRoute,
+  ConnectN8nRoute: ConnectN8nRoute,
+  OauthClientMetadataDotjsonRoute: OauthClientMetadataDotjsonRoute,
+  OauthN8nCallbackRoute: OauthN8nCallbackRoute,
+  OauthN8nResultRoute: OauthN8nResultRoute,
 }
 export const routeTree = rootRouteImport
   ._addFileChildren(rootRouteChildren)

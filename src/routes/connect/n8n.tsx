@@ -70,7 +70,7 @@ function ConnectPage() {
           <div className="mt-3 text-sm text-white/70">
             {statusQuery.isLoading && <p>載入中… / Loading…</p>}
             {connected === false && <p>尚未連接 / Not connected</p>}
-            {connected === true && (
+            {statusQuery.data && statusQuery.data.connected === true && (
               <div className="space-y-1">
                 <p>
                   已連接至 / Connected to:{" "}
