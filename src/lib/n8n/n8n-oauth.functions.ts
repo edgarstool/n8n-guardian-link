@@ -5,7 +5,7 @@ import { discoverN8n } from "./discovery.server";
 import { getEnv } from "./env.server";
 import { deleteTokens, getTokens } from "./kv.server";
 import { runInitializeAndListTools } from "./mcp.server";
-import { setPendingAuthCookie, clearPendingAuthCookie } from "./pending-cookie.server";
+import { setPendingAuthCookie } from "./pending-cookie.server";
 import {
   generatePkceVerifier,
   generateState,
