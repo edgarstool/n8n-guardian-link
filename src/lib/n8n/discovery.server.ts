@@ -84,7 +84,6 @@ async function fetchAuthorizationServerMetadata(issuer: string): Promise<ASMetad
     `${cleanIssuer}/.well-known/oauth-authorization-server`,
     `${cleanIssuer}/.well-known/openid-configuration`,
   ];
-  let lastErr: unknown;
   for (const c of candidates) {
     try {
       const raw = (await fetchJson(c)) as ASMetadata;
@@ -102,46 +101,46 @@ async function fetchAuthorizationServerMetadata(issuer: string): Promise<ASMetad
           client_id_metadata_document_supported: raw.client_id_metadata_document_supported,
         };
       }
-    } catch (e) {
-      lastErr = e;
+    } catch {
+      /* try next */
     }
   }
-  throw new Error(
-    `Could not fetch AS metadata for issuer ${issuer}: ${(lastErr as Error)?.message ?? "unknown"}`,
-  );
+  throw new CategorizedError("discovery_failed");
 }
 
 export async function discoverN8n(): Promise<DiscoveryResult> {
-  const env = getEnv();
-  const mcpUrl = requireN8nMcpUrl();
+  try {
+    const env = getEnv();
+    const mcpUrl = requireN8nMcpUrl();
 
-  const prm = await tryFetchProtectedResourceMetadata(mcpUrl);
-  let issuer: string;
-  let resource: string;
-  if (prm) {
-    issuer = prm.authorization_servers[0].replace(/\/$/, "");
-    resource = prm.resource ?? mcpUrl;
-  } else {
-    // No PRM → assume the MCP origin is also the AS (fallback).
-    issuer = new URL(mcpUrl).origin;
-    resource = mcpUrl;
+    const prm = await tryFetchProtectedResourceMetadata(mcpUrl);
+    let issuer: string;
+    let resource: string;
+    if (prm) {
+      issuer = prm.authorization_servers[0].replace(/\/$/, "");
+      resource = prm.resource ?? mcpUrl;
+    } else {
+      // No PRM → assume the MCP origin is also the AS (fallback).
+      issuer = new URL(mcpUrl).origin;
+      resource = mcpUrl;
+    }
+
+    const metadata = await fetchAuthorizationServerMetadata(issuer);
+
+    if (env.N8N_AUTHORIZATION_URL) metadata.authorization_endpoint = env.N8N_AUTHORIZATION_URL;
+    if (env.N8N_TOKEN_URL) metadata.token_endpoint = env.N8N_TOKEN_URL;
+    if (env.N8N_REGISTRATION_URL) metadata.registration_endpoint = env.N8N_REGISTRATION_URL;
+
+    const methods = metadata.code_challenge_methods_supported ?? [];
+    if (!methods.includes("S256")) {
+      throw new CategorizedError("discovery_failed");
+    }
+
+    await putASMetadata(metadata);
+    return { issuer: metadata.issuer, resource, metadata };
+  } catch (e) {
+    if (e instanceof CategorizedError) throw e;
+    logCategory("discovery", "discovery_failed");
+    throw new CategorizedError("discovery_failed");
   }
-
-  let metadata = await fetchAuthorizationServerMetadata(issuer);
-
-  // Apply optional diagnostic overrides
-  if (env.N8N_AUTHORIZATION_URL) metadata.authorization_endpoint = env.N8N_AUTHORIZATION_URL;
-  if (env.N8N_TOKEN_URL) metadata.token_endpoint = env.N8N_TOKEN_URL;
-  if (env.N8N_REGISTRATION_URL) metadata.registration_endpoint = env.N8N_REGISTRATION_URL;
-
-  // Enforce S256
-  const methods = metadata.code_challenge_methods_supported ?? [];
-  if (!methods.includes("S256")) {
-    throw new Error(
-      `Authorization server ${metadata.issuer} does not advertise PKCE S256 support (code_challenge_methods_supported=${JSON.stringify(methods)}). Refusing to proceed.`,
-    );
-  }
-
-  await putASMetadata(metadata);
-  return { issuer: metadata.issuer, resource, metadata };
 }
