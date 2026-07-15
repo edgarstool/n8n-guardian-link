@@ -1,18 +1,19 @@
 # Self-managed Cloudflare Workers deployment for the n8n MCP OAuth connector.
-# This file overrides dist/server/wrangler.json produced by the build.
+# Overrides dist/server/wrangler.json produced by the build.
 #
-# Secrets — set with Wrangler (never commit these values):
-#   wrangler secret put SESSION_SECRET   # >=32 bytes of random entropy
-#   wrangler secret put N8N_MCP_URL      # exact Instance Server URL from n8n
+# Runtime storage is Supabase (see src/lib/n8n/db.server.ts and
+# src/lib/n8n/api-keys.server.ts). No Cloudflare KV namespace is required.
 #
-# One-time infra:
-#   wrangler kv namespace create OAUTH_STORE
-#   -> copy the returned id into kv_namespaces[].id below (REPLACE_WITH_KV_ID)
+# Required Worker secrets (set once, never commit values):
+#   wrangler secret put SUPABASE_URL
+#   wrangler secret put SUPABASE_SERVICE_ROLE_KEY
+# Optional (only if you later re-enable server-signed cookies):
+#   wrangler secret put SESSION_SECRET
 #
 # Custom domain is managed by Wrangler. Cloudflare will create the DNS record
-# and certificate automatically when the Worker is first deployed.
-# WARNING: deployment will fail if connect.edgars.tools already has a conflicting
-# CNAME record. Remove any conflicting record at your DNS provider before deploying.
+# and TLS certificate automatically on first deploy.
+# WARNING: deployment fails if connect.edgars.tools already has a conflicting
+# CNAME/A record. Remove the conflicting record before deploying.
 
 name = "edgars-n8n-connector"
 main = "dist/server/index.mjs"
@@ -23,10 +24,6 @@ no_bundle = true
 [assets]
 binding = "ASSETS"
 directory = "dist/client"
-
-[[kv_namespaces]]
-binding = "OAUTH_STORE"
-id = "REPLACE_WITH_KV_ID"
 
 [vars]
 APP_BASE_URL = "https://connect.edgars.tools"
