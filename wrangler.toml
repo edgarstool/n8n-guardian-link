@@ -16,14 +16,14 @@
 # CNAME/A record. Remove the conflicting record before deploying.
 
 name = "edgars-n8n-connector"
-main = "dist/server/index.mjs"
+main = ".output/server/index.mjs"
 compatibility_date = "2026-07-14"
 compatibility_flags = ["nodejs_compat"]
 no_bundle = true
 
 [assets]
 binding = "ASSETS"
-directory = "dist/client"
+directory = ".output/public"
 
 [vars]
 APP_BASE_URL = "https://connect.edgars.tools"
