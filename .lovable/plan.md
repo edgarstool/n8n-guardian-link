@@ -1,129 +1,72 @@
-# n8n MCP OAuth 2.1 Client — Final Build Plan (Corrections Applied)
+# n8n MCP OAuth 2.1 Client — Current Build Plan
 
 ## Scope
 
-Real OAuth 2.1 + PKCE client for n8n Instance-level MCP, deployed at `https://connect.edgars.tools` on Cloudflare Workers. Discovery-driven, KV-backed, refresh-capable. No manual OAuth endpoint entry, no browser-side tokens.
+OAuth 2.1 client for n8n Instance-level MCP, deployed at `https://connect.edgars.tools` on Cloudflare Workers. The flow is discovery-driven, requires PKCE S256, supports CIMD/DCR, refreshes tokens server-side, and does not expose tokens to the browser.
 
-## Environment Variables
+## Runtime configuration
 
-Required:
-- `N8N_MCP_URL` — e.g. `https://<n8n-host>/mcp-server/http`
-- `APP_BASE_URL=https://connect.edgars.tools` (redirect URI derived: `${APP_BASE_URL}/oauth/n8n/callback`)
-- `SESSION_SECRET` — 32+ bytes, for opaque session cookie signing
+Required in production:
 
-Optional (diagnostic overrides only, not part of normal flow):
-- `N8N_AUTHORIZATION_URL`, `N8N_TOKEN_URL`, `N8N_REGISTRATION_URL`
-- `N8N_CLIENT_ID`, `N8N_CLIENT_SECRET` (preregistered path)
+- `APP_BASE_URL=https://connect.edgars.tools`
+- `SUPABASE_URL`
+- `SUPABASE_SERVICE_ROLE_KEY`
+- `SESSION_SECRET` before enabling signed session cookies
 
-Cloudflare binding:
-- KV namespace **`OAUTH_STORE`** (declared in `wrangler.toml` / nitro cloudflare preset config)
+OAuth target configuration:
 
-## Files (created)
+- `N8N_MCP_URL`, or a per-session MCP URL stored in `n8n_sessions`
 
-1. `src/lib/n8n/discovery.server.ts` — MCP discovery pipeline:
-   - Unauthenticated probe of `N8N_MCP_URL` → parse `WWW-Authenticate` for `resource_metadata`.
-   - Fallback to RFC 9728 well-known paths (`/.well-known/oauth-protected-resource` on MCP origin + path variants).
-   - Fetch Protected Resource Metadata → read `authorization_servers[]`.
-   - Fetch AS Metadata (RFC 8414) or OIDC Discovery.
-   - Assert `S256 ∈ code_challenge_methods_supported`, else refuse.
-   - Return normalized `{ issuer, authorization_endpoint, token_endpoint, registration_endpoint?, scopes_supported, code_challenge_methods_supported, token_endpoint_auth_methods_supported, client_id_metadata_document_supported, resource }`.
-   - Apply diagnostic overrides last, only if set.
-   - Cache in KV keyed by issuer.
+Optional diagnostic or preregistered-client overrides:
 
-2. `src/lib/n8n/pkce.server.ts` — S256 verifier + challenge, `state` generator, opaque session-ID generator (all via WebCrypto).
+- `N8N_AUTHORIZATION_URL`
+- `N8N_TOKEN_URL`
+- `N8N_REGISTRATION_URL`
+- `N8N_CLIENT_ID`
+- `N8N_CLIENT_SECRET`
 
-3. `src/lib/n8n/kv.server.ts` — Typed KV accessors bound to `OAUTH_STORE`:
-   - `putRegistration(issuer, redirectUri, client)` / `getRegistration(issuer, redirectUri)`
-   - `putPendingAuth(sessionId, { state, verifier, issuer, resource, redirectUri, expiresAt })` (TTL 10 min)
-   - `getPendingAuth(sessionId)` / `deletePendingAuth`
-   - `putTokens(sessionId, { access_token, refresh_token, expires_at, token_type, scope, issuer, client_id, token_endpoint_auth_method, connected_at })`
-   - `getTokens(sessionId)` / `putASMetadata(issuer, meta)`
-   - Access via `getRequestEvent().context.cloudflare.env.OAUTH_STORE`.
+## Storage architecture
 
-4. `src/lib/n8n/registration.server.ts` — Registration priority resolver:
-   1. `N8N_CLIENT_ID` preconfigured → return.
-   2. `client_id_metadata_document_supported === true` → return `{ client_id: "${APP_BASE_URL}/oauth/client-metadata.json", token_endpoint_auth_method: "none" }`.
-   3. `registration_endpoint` present → DCR POST (persisted in KV by `issuer + redirectUri`, reused across sessions).
-   4. Throw `missing-client-registration`.
-   - Chooses `token_endpoint_auth_method` from intersection of registered method and `token_endpoint_auth_methods_supported`. Never auto-upgrades to `client_secret_post` just because a secret exists.
+`src/lib/n8n/kv.server.ts` is a storage dispatcher retained under its historical filename. Its backend selection order is:
 
-5. `src/lib/n8n/tokens.server.ts` — Token endpoint calls:
-   - Authorization Code + PKCE exchange (includes `resource`).
-   - Refresh Token grant, persists rotated refresh_token if returned.
-   - `getValidAccessToken(sessionId)` — checks expiry with 60s safety window, refreshes if needed, marks connection `needs_reauth` if refresh fails or no refresh_token.
+1. **Supabase** when `SUPABASE_URL` and `SUPABASE_SERVICE_ROLE_KEY` are configured.
+2. **Cloudflare KV** when an `OAUTH_STORE` binding is present.
+3. **In-memory storage** only for development and tests.
 
-6. `src/lib/n8n/mcp.server.ts` — MCP client:
-   - Supported client versions: `["2025-11-25", "2025-06-18", "2025-03-26"]`; sends latest in `initialize`; accepts server value only if in the list; stores negotiated version in KV; sends `MCP-Protocol-Version: <negotiated>` on all follow-up requests.
-   - Accepts both `application/json` and `text/event-stream` (parses SSE `data:` frames).
-   - Sequence: `initialize` → `notifications/initialized` → `tools/list`.
-   - On HTTP 401: exactly one refresh + retry; then fail with `needs_reauth`.
+Production without Supabase or KV is rejected. The current Cloudflare deployment uses Supabase, so `wrangler.toml` does **not** declare or require an `OAUTH_STORE` namespace. KV remains an optional fallback path, not a deployment prerequisite.
 
-7. `src/lib/n8n/n8n-oauth.functions.ts` — Server functions:
-   - `startN8nOAuth()` → discovery, PKCE, resolve registration, persist pending state to KV under new session ID, set opaque session cookie (HttpOnly, Secure, SameSite=Lax, Path=/), return `authorize_url` including `resource`, `state`, `code_challenge`, `code_challenge_method=S256`.
-   - `getN8nConnectionStatus()` → reads tokens from KV via session cookie.
-   - `disconnectN8n()` → deletes KV entries and cookie.
-   - `listN8nMcpTools()` → runs `initialize`/`initialized`/`tools/list` with valid access token; success only when `tools/list` returns.
+Supabase tables:
 
-8. `src/routes/oauth/n8n/callback.tsx` — Server route:
-   - Validates `state` against KV pending entry (single-use, delete on read).
-   - Exchanges code (with PKCE verifier + `resource`) at discovered `token_endpoint` using resolved auth method.
-   - Persists tokens to KV.
-   - Immediately runs `initialize`/`initialized`/`tools/list` to validate.
-   - Redirects to `/oauth/n8n/result?status=success|error|cancelled` (never with tokens/codes).
+- `n8n_sessions` — opaque session ID to selected n8n MCP URL
+- `n8n_pending_auth` — single-use OAuth state and PKCE verifier
+- `n8n_as_metadata` — authorization-server metadata cache
+- `n8n_client_registrations` — CIMD/DCR or preregistered client data
+- `n8n_tokens` — token payload per opaque session
+- `n8n_api_keys` — hashed connector API keys per opaque session
 
-9. `src/routes/oauth/n8n/result.tsx` — Visual page (bilingual, EDGAR'S Tools design), reads status from query; on success shows tool count from a follow-up `listN8nMcpTools` call.
+All current server-side database access uses the service-role client. The `n8n_*` records are keyed by anonymous `sid` and are not yet bound to `auth.users`.
 
-10. `src/routes/oauth/client-metadata[.]json.tsx` — Serves CIMD JSON:
-    ```json
-    {
-      "client_id": "https://connect.edgars.tools/oauth/client-metadata.json",
-      "client_name": "EDGAR'S Tools — n8n Connector",
-      "client_uri": "https://connect.edgars.tools",
-      "redirect_uris": ["https://connect.edgars.tools/oauth/n8n/callback"],
-      "grant_types": ["authorization_code", "refresh_token"],
-      "response_types": ["code"],
-      "token_endpoint_auth_method": "none",
-      "application_type": "web"
-    }
-    ```
+## OAuth client flow
 
-11. `src/routes/connect/n8n.tsx` — Landing/connect page (EDGAR'S Tools shell).
+1. Discover protected-resource and authorization-server metadata from the n8n MCP endpoint.
+2. Require advertised PKCE `S256`.
+3. Resolve client registration in this order:
+   - preconfigured `N8N_CLIENT_ID`
+   - CIMD when supported
+   - DCR when a registration endpoint is advertised
+4. Store pending state and verifier server-side.
+5. Exchange the authorization code and persist tokens server-side.
+6. Validate the connection with MCP `initialize`, `notifications/initialized`, and `tools/list`.
+7. Refresh tokens server-side when needed.
 
-12. `src/components/site/*` — `SiteShell`, `Hero`, `StatusPanel`, `Footer` (bilingual copy: 「授權成功」/「授權失敗」/「已取消授權」).
+## Security invariants
 
-13. `src/routes/index.tsx` — EDGAR'S Tools homepage using SiteShell.
+- Access tokens, refresh tokens, authorization codes, and PKCE verifiers never reach browser JavaScript or logs.
+- OAuth state is single-use and expires after ten minutes.
+- Redirect URIs are derived from the request origin or canonical `APP_BASE_URL`.
+- Production storage cannot silently fall back to memory.
+- The current opaque `n8n_sid` cookie must be HMAC-signed before production, unless it is replaced by Supabase Auth as part of the identity-layer decision.
 
-14. `src/styles.css` — Design tokens (deep charcoal, gear accents), Tailwind v4 `@theme`.
+## Identity-layer status
 
-## Files (modified)
-
-- `src/routes/__root.tsx` — real head metadata (title, description, OG, Twitter card).
-- `wrangler.toml` (or equivalent nitro cloudflare config) — add `OAUTH_STORE` KV binding.
-
-## Security Invariants
-
-- No access/refresh tokens or codes ever reach the browser or logs.
-- Cookie carries only opaque session ID (32B random) + HMAC.
-- `state` single-use, TTL 10 min, verified server-side.
-- PKCE S256 mandatory; refuse if AS doesn't advertise S256.
-- Redirect URI hardcoded-derived from `APP_BASE_URL`; not user-configurable.
-- DCR client credentials stored only in KV, keyed by `issuer + redirect_uri`.
-
-## Verification (final report items)
-
-- APP_BASE_URL, callback URL, n8n allowlist entry
-- Discovered issuer
-- Registration mechanism used
-- Negotiated MCP protocol version
-- KV binding name (`OAUTH_STORE`)
-- Refresh test result
-- `initialize` / `initialized` / `tools/list` results
-- Files changed
-- Remaining configuration
-
-## Open Item Requiring User Input Before/After Build
-
-To complete verification and populate the final report, I need from you at build time:
-- `N8N_MCP_URL` value (the exact URL from n8n Settings → MCP access)
-- Confirmation that the Cloudflare project for this Lovable app has KV enabled (or approval to add the `OAUTH_STORE` binding via `wrangler.toml`)
-- Confirmation that `connect.edgars.tools` is (or will be) pointed at this deployment
+The connector is currently an OAuth client to n8n, not the Supabase OAuth authorization server. Its anonymous `sid` storage model is independent of Supabase Auth users. Any move to a Supabase user-bound model or `auth.edgars.tools` requires a separate migration and product decision.
