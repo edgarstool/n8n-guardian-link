@@ -39,6 +39,10 @@ const REASON_COPY: Record<ErrorCategory, { zh: string; en: string }> = {
     zh: "找不到對應的 OAuth 用戶端註冊資料。",
     en: "No matching OAuth client registration was found.",
   },
+  invalid_mcp_url: {
+    zh: "目前儲存的 n8n Instance MCP URL 無效、無法連線，或 n8n 回傳 404。請回 n8n 的 Instance-level MCP → Connection details → OAuth 重新複製最新 Instance Server URL。",
+    en: "The saved n8n Instance MCP URL is invalid, unreachable, or returning 404. Copy the latest Instance Server URL from n8n Instance-level MCP → Connection details → OAuth.",
+  },
   discovery_failed: {
     zh: "無法自 n8n 探索 OAuth 中繼資料。請確認 Instance MCP URL 正確且伺服器可用。",
     en: "Failed to discover OAuth metadata from n8n. Verify the Instance MCP URL.",

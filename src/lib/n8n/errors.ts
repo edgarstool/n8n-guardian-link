@@ -7,6 +7,7 @@ export const ERROR_CATEGORIES = [
   "state_expired",
   "state_mismatch",
   "missing_registration",
+  "invalid_mcp_url",
   "discovery_failed",
   "token_exchange_failed",
   "mcp_initialize_failed",

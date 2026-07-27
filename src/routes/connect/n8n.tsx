@@ -36,6 +36,7 @@ const REASON_ZH: Record<ErrorCategory, string> = {
   state_expired: "授權工作階段已逾時，請重新開始。",
   state_mismatch: "偵測到狀態不一致，已中止流程。",
   missing_registration: "找不到 OAuth 用戶端註冊資料。",
+  invalid_mcp_url: "n8n Instance MCP URL 無效或無法連線。",
   discovery_failed: "無法探索 n8n OAuth 中繼資料。請確認 Instance MCP URL。",
   token_exchange_failed: "與 n8n 交換權杖失敗。",
   mcp_initialize_failed: "MCP initialize 呼叫失敗。",
@@ -97,6 +98,8 @@ function ConnectPage() {
         const map: Record<string, string> = {
           invalid_url: "網址格式不正確，請貼上完整的 Instance Server URL。",
           https_required: "正式環境必須使用 HTTPS。",
+          invalid_mcp_url:
+            "這個 n8n Instance MCP URL 無法連線或回傳 404。請回 n8n → Settings → Instance-level MCP → Connection details → OAuth 重新複製 Instance Server URL。",
           missing_configuration: "伺服器儲存服務尚未就緒，請稍後重試。",
         };
         setSaveError(map[data.error] ?? "儲存失敗");
@@ -156,6 +159,10 @@ function ConnectPage() {
           <p className="mt-2 text-sm text-white/70">
             前往 n8n → Settings → Instance-level MCP → Connection details → OAuth，
             將「完整的 Instance Server URL」原封不動複製過來（路徑與結尾斜線都保留）。
+          </p>
+          <p className="mt-2 text-xs text-amber-300/90">
+            若 Lovable Connectors 顯示 Connection failed，通常代表此 URL 本身無效或 n8n workspace
+            未啟用 Instance-level MCP；請以 n8n 畫面最新產生的 OAuth URL 為準。
           </p>
           <p className="mt-2 text-xs text-white/50">
             In n8n → Settings → Instance-level MCP → Connection details → OAuth, copy the exact

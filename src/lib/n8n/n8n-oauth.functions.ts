@@ -31,7 +31,7 @@ import { clearSessionCookie, ensureSessionId } from "./session.server";
 
 export type SaveMcpUrlResult =
   | { ok: true; mcpUrl: string; callbackUrl: string }
-  | { ok: false; error: "invalid_url" | "https_required" | "missing_configuration" };
+  | { ok: false; error: "invalid_url" | "https_required" | "invalid_mcp_url" | "missing_configuration" };
 
 export const saveN8nMcpUrl = createServerFn({ method: "POST" })
   .inputValidator((input: unknown) =>
@@ -52,14 +52,16 @@ export const saveN8nMcpUrl = createServerFn({ method: "POST" })
       return { ok: false, error: "invalid_url" };
     }
     try {
+      await discoverN8n(raw);
       const sid = ensureSessionId();
       await ensureSessionRow(sid);
       // Preserve the URL exactly as pasted (path + trailing slash intact).
       await putSessionMcpUrl(sid, raw);
       return { ok: true, mcpUrl: raw, callbackUrl: getEnv().REDIRECT_URI };
     } catch (e) {
-      logCategory("saveN8nMcpUrl", toCategory(e, "missing_configuration"));
-      return { ok: false, error: "missing_configuration" };
+      const cat = toCategory(e, "missing_configuration");
+      logCategory("saveN8nMcpUrl", cat);
+      return { ok: false, error: cat === "invalid_mcp_url" || cat === "discovery_failed" ? "invalid_mcp_url" : "missing_configuration" };
     }
   });
 
