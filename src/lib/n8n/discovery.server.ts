@@ -6,6 +6,28 @@ import { CategorizedError, logCategory } from "./errors.server";
 import { putASMetadata } from "./kv.server";
 import type { ASMetadata, DiscoveryResult } from "./storage-types";
 
+async function probeMcpUrl(mcpUrl: string): Promise<void> {
+  try {
+    const probe = await fetch(mcpUrl, {
+      method: "POST",
+      headers: { "content-type": "application/json", accept: "application/json" },
+      body: JSON.stringify({ jsonrpc: "2.0", id: 0, method: "initialize" }),
+      signal: AbortSignal.timeout(8_000),
+    });
+    if (probe.status === 404) throw new CategorizedError("invalid_mcp_url", 404);
+    const contentType = probe.headers.get("content-type") ?? "";
+    if (contentType.includes("text/html")) {
+      const text = await probe.text().catch(() => "");
+      if (text.includes("No workspace here") || text.includes("404")) {
+        throw new CategorizedError("invalid_mcp_url", probe.status);
+      }
+    }
+  } catch (e) {
+    if (e instanceof CategorizedError) throw e;
+    throw new CategorizedError("discovery_failed");
+  }
+}
+
 function parseWwwAuthenticate(header: string): Record<string, string> {
   const out: Record<string, string> = {};
   const idx = header.indexOf(" ");
@@ -110,6 +132,7 @@ async function fetchAuthorizationServerMetadata(issuer: string): Promise<ASMetad
 export async function discoverN8n(mcpUrl: string): Promise<DiscoveryResult> {
   try {
     const env = getEnv();
+    await probeMcpUrl(mcpUrl);
     const prm = await tryFetchProtectedResourceMetadata(mcpUrl);
     let issuer: string;
     let resource: string;
