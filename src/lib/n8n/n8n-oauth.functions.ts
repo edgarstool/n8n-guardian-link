@@ -25,7 +25,7 @@ import {
 import { runInitializeAndListTools } from "./mcp.server";
 import { generatePkceVerifier, generateState, pkceChallengeS256 } from "./pkce.server";
 import { resolveClientRegistration } from "./registration.server";
-import { clearSessionCookie, ensureSessionId, getSessionId } from "./session.server";
+import { clearSessionCookie, ensureSessionId } from "./session.server";
 
 // ---------- Save MCP URL ----------
 
