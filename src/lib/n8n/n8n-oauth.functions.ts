@@ -157,9 +157,13 @@ export const getN8nConnectionStatus = createServerFn({ method: "GET" }).handler(
     }
     const callbackUrl = getEnv().REDIRECT_URI;
     try {
+      const existingSid = getSessionId();
+      console.log("[DEBUG status] getSessionId() =>", existingSid ?? "undefined");
       const sid = ensureSessionId();
+      console.log("[DEBUG status] ensureSessionId() =>", sid);
       await ensureSessionRow(sid);
       const mcpUrl = (await getSessionMcpUrl(sid)) ?? undefined;
+      console.log("[DEBUG status] mcpUrl =>", mcpUrl ?? "null");
       const t = await getTokens(sid);
       if (!t) return { connected: false, storage, configured, mcpUrl, callbackUrl };
       return {
