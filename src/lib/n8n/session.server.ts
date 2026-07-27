@@ -20,7 +20,10 @@ export function ensureSessionId(): string {
 export function setSessionCookie(sid: string) {
   setCookie(COOKIE_NAME, sid, {
     httpOnly: true,
-    secure: true,
+    // Secure cookies are never *sent* over plain HTTP, which breaks the
+    // localhost dev server (and the preview proxy that forwards to it).
+    // Only enforce Secure in production, where the origin is always HTTPS.
+    secure: isProduction(),
     sameSite: "lax",
     path: "/",
     maxAge: 60 * 60 * 24 * 30, // 30 days
