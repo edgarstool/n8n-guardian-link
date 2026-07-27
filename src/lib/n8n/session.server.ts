@@ -1,6 +1,7 @@
-// Opaque session cookie (HttpOnly, Secure, SameSite=Lax). Carries only a session ID.
+// Opaque session cookie (HttpOnly, Secure in production, SameSite=Lax). Carries only a session ID.
 
 import { getCookie, setCookie, deleteCookie } from "@tanstack/react-start/server";
+import { isProduction } from "./env.server";
 import { generateSessionId } from "./pkce.server";
 
 const COOKIE_NAME = "n8n_sid";
