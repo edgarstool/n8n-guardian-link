@@ -1,6 +1,7 @@
-// Opaque session cookie (HttpOnly, Secure, SameSite=Lax). Carries only a session ID.
+// Opaque session cookie (HttpOnly, Secure in production, SameSite=Lax). Carries only a session ID.
 
 import { getCookie, setCookie, deleteCookie } from "@tanstack/react-start/server";
+import { isProduction } from "./env.server";
 import { generateSessionId } from "./pkce.server";
 
 const COOKIE_NAME = "n8n_sid";
@@ -20,7 +21,10 @@ export function ensureSessionId(): string {
 export function setSessionCookie(sid: string) {
   setCookie(COOKIE_NAME, sid, {
     httpOnly: true,
-    secure: true,
+    // Secure cookies are never *sent* over plain HTTP, which breaks the
+    // localhost dev server (and the preview proxy that forwards to it).
+    // Only enforce Secure in production, where the origin is always HTTPS.
+    secure: isProduction(),
     sameSite: "lax",
     path: "/",
     maxAge: 60 * 60 * 24 * 30, // 30 days
